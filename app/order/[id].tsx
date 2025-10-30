@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Image,
 } from 'react-native';
 import { Linking } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -20,6 +21,12 @@ interface Order {
   customer_id: string;
   status: string;
   total: number;
+  product_total?: number | null;
+  delivery_fee?: number | null;
+  service_fee?: number | null;
+  tax_amount?: number | null;
+  customer_total?: number | null;
+  payment_method?: 'online' | 'cod' | string;
   created_at: string;
   estimated_delivery_time?: string;
   actual_delivery_time?: string;
@@ -32,6 +39,7 @@ interface Order {
   merchant?: {
     name_ar?: string;
     logo_url?: string;
+    phone_number?: string;
   };
   driver?: {
     id?: string;
@@ -39,6 +47,8 @@ interface Order {
     phone_number?: string;
     rating?: number;
     vehicle_type?: string;
+    avatar_url?: string | null;
+    photo_url?: string | null;
   };
   customer?: {
     full_name?: string;
@@ -50,8 +60,8 @@ interface OrderItem {
   id: string;
   product_name_ar: string;
   quantity: number;
-  unit_price: number;
-  total_price: number;
+  price: number;
+  total: number;
 }
 
 // تكوين حالات الطلب مع التسلسل الزمني
@@ -60,6 +70,7 @@ const ORDER_STATUS_SEQUENCE = [
   { key: 'accepted', label: 'تم قبول الطلب', description: 'تم قبول طلبك من المتجر' },
   { key: 'preparing', label: 'قيد التحضير', description: 'طلبك قيد التحضير' },
   { key: 'ready', label: 'جاهز للتسليم', description: 'طلبك جاهز للتسليم' },
+  { key: 'out_for_delivery', label: 'بدأ التوصيل', description: 'السائق في طريقه للمتجر' },
   { key: 'picked_up', label: 'تم استلام الطلب', description: 'تم استلام طلبك من قبل السائق' },
   { key: 'on_the_way', label: 'في الطريق', description: 'طلبك في الطريق إليك' },
   { key: 'delivered', label: 'تم التوصيل', description: 'تم توصيل طلبك بنجاح' },
@@ -206,14 +217,19 @@ export default function OrderDetailScreen() {
     try {
       setLoading(true);
       
-      // Fetch order details with driver information
+      // Fetch order details with driver information (include images)
       const { data: orderData, error: orderError } = await supabase
         .from('orders')
         .select(`
           *,
-          delivery_address:addresses(street_address, city),
-          merchant:merchants(name_ar, logo_url),
-          driver:profiles!orders_driver_id_fkey(full_name, phone_number, driver_profiles(average_rating, vehicle_type))
+          merchant:merchants!orders_merchant_id_fkey(name_ar, logo_url, phone_number),
+          driver:profiles!orders_driver_id_fkey(
+            id,
+            full_name,
+            phone_number,
+            avatar_url,
+            driver_profiles(average_rating, vehicle_type, photo_url)
+          )
         `)
         .eq('id', id)
         .single();
@@ -223,18 +239,19 @@ export default function OrderDetailScreen() {
 
     // Format driver data if exists
     let driverInfo = undefined;
-    if (orderData.driver && orderData.driver.length > 0) {
-      const driverProfile = orderData.driver[0];
+    const driver = Array.isArray(orderData.driver) ? orderData.driver[0] : orderData.driver;
+    if (driver) {
+      const driverProfile = driver.driver_profiles && driver.driver_profiles.length > 0 
+        ? driver.driver_profiles[0] 
+        : null;
       driverInfo = {
-        id: driverProfile.id,
-        full_name: driverProfile.full_name,
-        phone_number: driverProfile.phone_number,
-        rating: driverProfile.driver_profiles && driverProfile.driver_profiles.length > 0 
-          ? driverProfile.driver_profiles[0].average_rating 
-          : undefined,
-        vehicle_type: driverProfile.driver_profiles && driverProfile.driver_profiles.length > 0 
-          ? driverProfile.driver_profiles[0].vehicle_type 
-          : undefined,
+        id: driver.id,
+        full_name: driver.full_name || 'السائق',
+        phone_number: driver.phone_number || '',
+        rating: driverProfile?.average_rating,
+        vehicle_type: driverProfile?.vehicle_type,
+        avatar_url: driver.avatar_url ?? null,
+        photo_url: driverProfile?.photo_url ?? null,
       };
     }
 
@@ -250,21 +267,39 @@ export default function OrderDetailScreen() {
       actual_delivery_time: orderData.actual_delivery_time,
       rating: orderData.rating,
       review_text: orderData.review_text,
-      delivery_address: orderData.delivery_address || undefined,
+      delivery_address: orderData.customer_latitude && orderData.customer_longitude
+        ? {
+            street_address: `موقع التوصيل: ${Number(orderData.customer_latitude).toFixed(4)}, ${Number(orderData.customer_longitude).toFixed(4)}`,
+            city: ''
+          }
+        : undefined,
       merchant: orderData.merchant || undefined,
       driver: driverInfo,
     };
 
     setOrder(formattedOrder);
 
-    // Fetch order items
+    // Fetch order items with product names
     const { data: itemsData, error: itemsError } = await supabase
       .from('order_items')
-      .select('*')
+      .select('id, product_id, quantity, price, total, product:products(name)')
       .eq('order_id', id);
 
     if (itemsError) throw itemsError;
-    setOrderItems(itemsData || []);
+    
+    // Format items with product names
+    const formattedItems = (itemsData || []).map(item => {
+      const product = Array.isArray(item.product) ? item.product[0] : item.product;
+      return {
+        id: item.id,
+        product_name_ar: product?.name || 'منتج',
+        quantity: item.quantity,
+        price: item.price,
+        total: item.total,
+      };
+    });
+    
+    setOrderItems(formattedItems);
   } catch (error) {
     console.error('Error fetching order details:', error);
     Alert.alert('خطأ', 'حدث خطأ أثناء تحميل تفاصيل الطلب');
@@ -467,7 +502,14 @@ export default function OrderDetailScreen() {
               <Text style={styles.sectionTitle}>معلومات السائق</Text>
             </View>
             <View style={styles.driverInfo}>
-              <View style={styles.driverAvatar} />
+              {(() => {
+              const src = order.driver?.photo_url || order.driver?.avatar_url || order.merchant?.logo_url || undefined;
+              return src ? (
+                <Image source={{ uri: src }} style={styles.driverAvatarImage} resizeMode="cover" />
+              ) : (
+                <View style={styles.driverAvatar} />
+              );
+            })()}
               <View style={styles.driverDetails}>
                 <Text style={styles.driverName}>{order.driver.full_name}</Text>
                 <View style={styles.driverStats}>
@@ -485,19 +527,41 @@ export default function OrderDetailScreen() {
                   </View>
                 </View>
               </View>
-              <TouchableOpacity 
-                style={styles.callButton}
-                onPress={() => {
-                  if (order?.driver?.phone_number) {
-                    Linking.openURL(`tel:${order.driver.phone_number}`);
-                  } else {
-                    Alert.alert('خطأ', 'رقم السائق غير متوفر');
-                  }
-                }}
-              >
-                <Phone size={20} color={colors.primary} />
-              </TouchableOpacity>
+              <View style={styles.driverActions}>
+                <TouchableOpacity 
+                  style={styles.actionButton}
+                  onPress={() => {
+                    if (order?.driver?.phone_number) {
+                      Linking.openURL(`tel:${order.driver.phone_number}`);
+                    } else {
+                      Alert.alert('❌ خطأ', 'رقم السائق غير متوفر', [{ text: 'حسناً' }]);
+                    }
+                  }}
+                >
+                  <Phone size={20} color={colors.primary} />
+                </TouchableOpacity>
+                
+                {conversationId && (
+                  <TouchableOpacity 
+                    style={styles.actionButton}
+                    onPress={() => router.push(`/chat/${conversationId}`)}
+                  >
+                    <MessageCircle size={20} color={colors.primary} />
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
+
+            {/* Track Driver Button - Show when order is being delivered */}
+            {(order.status === 'out_for_delivery' || order.status === 'on_the_way' || order.status === 'picked_up') && (
+              <TouchableOpacity
+                style={styles.trackDriverButton}
+                onPress={() => router.push(`/order/${order.id}/track-driver`)}
+              >
+                <MapPin size={20} color={colors.white} />
+                <Text style={styles.trackDriverButtonText}>🗺️ تتبع موقع السائق مباشرة</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -520,10 +584,23 @@ export default function OrderDetailScreen() {
             <Text style={styles.sectionTitle}>المتجر</Text>
           </View>
           <View style={styles.merchantInfo}>
-            <View style={styles.merchantLogo} />
+            {order.merchant?.logo_url ? (
+              <Image source={{ uri: order.merchant.logo_url }} style={styles.merchantLogoImage} resizeMode="cover" />
+            ) : (
+              <View style={styles.merchantLogo} />
+            )}
             <View style={styles.merchantDetails}>
               <Text style={styles.merchantName}>{order.merchant?.name_ar || 'متجر'}</Text>
-              <TouchableOpacity style={styles.contactButton}>
+              <TouchableOpacity 
+                style={styles.contactButton}
+                onPress={() => {
+                  if (order?.merchant?.phone_number) {
+                    Linking.openURL(`tel:${order.merchant.phone_number}`);
+                  } else {
+                    Alert.alert('❌ خطأ', 'رقم هاتف المتجر غير متوفر', [{ text: 'حسناً' }]);
+                  }
+                }}
+              >
                 <Phone size={16} color={colors.primary} />
                 <Text style={styles.contactText}>اتصال</Text>
               </TouchableOpacity>
@@ -554,8 +631,8 @@ export default function OrderDetailScreen() {
               <Text style={styles.itemName}>{item.product_name_ar}</Text>
               <View style={styles.itemDetails}>
                 <Text style={styles.itemQuantity}>{item.quantity} ×</Text>
-                <Text style={styles.itemPrice}>{item.unit_price.toFixed(2)} ريال</Text>
-                <Text style={styles.itemTotal}>{item.total_price.toFixed(2)} ريال</Text>
+                <Text style={styles.itemPrice}>{(item.price || 0).toFixed(2)} جنيه</Text>
+                <Text style={styles.itemTotal}>{(item.total || 0).toFixed(2)} جنيه</Text>
               </View>
             </View>
           ))}
@@ -573,23 +650,23 @@ export default function OrderDetailScreen() {
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر المنتجات</Text>
-            <Text style={styles.summaryValue}>{(order.total - 14.00).toFixed(2)} ريال</Text>
+            <Text style={styles.summaryValue}>{(order.product_total ?? Math.max(0, order.total - ((order.delivery_fee ?? 0) + (order.service_fee ?? 0) + (order.tax_amount ?? 0)))).toFixed(2)} جنيه</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر التوصيل</Text>
-            <Text style={styles.summaryValue}>10.00 ريال</Text>
+            <Text style={styles.summaryValue}>{(order.delivery_fee ?? 0).toFixed(2)} جنيه</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>رسوم الخدمة</Text>
-            <Text style={styles.summaryValue}>2.50 ريال</Text>
+            <Text style={styles.summaryValue}>{(order.service_fee ?? 0).toFixed(2)} جنيه</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>الضريبة</Text>
-            <Text style={styles.summaryValue}>1.50 ريال</Text>
+            <Text style={styles.summaryValue}>{(order.tax_amount ?? 0).toFixed(2)} جنيه</Text>
           </View>
           <View style={[styles.summaryRow, styles.totalRow]}>
             <Text style={styles.totalLabel}>المجموع الإجمالي</Text>
-            <Text style={styles.totalValue}>{order.total.toFixed(2)} ريال</Text>
+            <Text style={styles.totalValue}>{(order.customer_total ?? order.total).toFixed(2)} جنيه</Text>
           </View>
         </View>
       </ScrollView>
@@ -776,19 +853,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   driverAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: colors.lightGray,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.background,
     marginRight: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  driverDetails: {
-    flex: 1,
+  driverAvatarImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    marginRight: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   driverName: {
     ...typography.bodyMedium,
     color: colors.text,
     marginBottom: spacing.xs,
+  },
+  driverDetails: {
+    flex: 1,
   },
   driverStats: {
     flexDirection: 'row',
@@ -804,10 +891,22 @@ const styles = StyleSheet.create({
     color: colors.textLight,
     marginLeft: spacing.xs,
   },
-  callButton: {
-    padding: spacing.sm,
-    backgroundColor: colors.lightGray,
-    borderRadius: borderRadius.sm,
+  trackDriverButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.md,
+    gap: spacing.sm,
+    ...shadows.small,
+  },
+  trackDriverButtonText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    fontWeight: '600',
   },
   assignDriverButton: {
     backgroundColor: colors.primary,
@@ -819,22 +918,33 @@ const styles = StyleSheet.create({
     ...typography.bodyMedium,
     color: colors.white,
   },
+  // ...
   merchantInfo: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   merchantLogo: {
-    width: 60,
-    height: 60,
-    borderRadius: borderRadius.md,
-    backgroundColor: colors.lightGray,
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+    backgroundColor: colors.background,
     marginRight: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  merchantLogoImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+    marginRight: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   merchantDetails: {
     flex: 1,
   },
   merchantName: {
-    ...typography.bodyMedium,
+    // ...
     color: colors.text,
     marginBottom: spacing.sm,
   },
@@ -847,6 +957,19 @@ const styles = StyleSheet.create({
   contactText: {
     ...typography.body,
     color: colors.primary,
+  },
+  driverActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  actionButton: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.lightGray,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadows.small,
   },
   addressText: {
     ...typography.body,

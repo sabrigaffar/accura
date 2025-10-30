@@ -35,34 +35,76 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (userId: string) => {
+    // محاولة جلب من cache أولاً للسرعة
+    try {
+      const cachedProfile = await AsyncStorage.getItem(`profile_${userId}`);
+      if (cachedProfile) {
+        const parsed = JSON.parse(cachedProfile);
+        setProfile(parsed);
+        // جلب في الخلفية للتحديث
+      }
+    } catch (e) {
+      console.log('Cache read error:', e);
+    }
+
     const { data } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .maybeSingle();
 
-    if (data) {
-      setProfile(data);
-      return;
+    let current = data;
+
+    if (!current) {
+      const defaults: any = {
+        id: userId,
+        full_name: user?.user_metadata?.full_name ?? null,
+        phone_number: user?.user_metadata?.phone ?? null,
+        user_type: (user?.user_metadata as any)?.role ?? 'customer',
+        language: 'ar',
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: created } = await supabase
+        .from('profiles')
+        .insert(defaults)
+        .select('*')
+        .single();
+
+      current = created ?? null;
     }
 
-    const defaults: any = {
-      id: userId,
-      full_name: user?.user_metadata?.full_name ?? null,
-      phone_number: user?.user_metadata?.phone_number ?? null,
-      language: 'ar',
-      is_active: true,
-      updated_at: new Date().toISOString(),
-    };
+    if (current) {
+      // حفظ في cache للسرعة في المرة القادمة
+      try {
+        await AsyncStorage.setItem(`profile_${userId}`, JSON.stringify(current));
+      } catch (e) {
+        console.log('Cache write error:', e);
+      }
 
-    const { data: created } = await supabase
-      .from('profiles')
-      .insert(defaults)
-      .select('*')
-      .single();
-
-    if (created) {
-      setProfile(created);
+      // فقط حدث user_type إذا لم يكن merchant ووجدنا سجل merchant
+      if (current.user_type !== 'merchant') {
+        const { data: merchant } = await supabase
+          .from('merchants')
+          .select('id')
+          .eq('owner_id', userId)
+          .limit(1)
+          .maybeSingle();
+        if (merchant) {
+          // تحديث محلي فوري لمنع re-fetch
+          current = { ...current, user_type: 'merchant' as UserType };
+          // تحديث cache
+          await AsyncStorage.setItem(`profile_${userId}`, JSON.stringify(current));
+          // تحديث في الخلفية بدون انتظار
+          supabase
+            .from('profiles')
+            .update({ user_type: 'merchant', updated_at: new Date().toISOString() })
+            .eq('id', userId)
+            .then(() => console.log('✅ Profile user_type synced to merchant'));
+        }
+      }
+      setProfile(current);
     }
   };
 
@@ -109,7 +151,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        fetchProfile(session.user.id);
+        await fetchProfile(session.user.id);
       }
       setLoading(false);
     });

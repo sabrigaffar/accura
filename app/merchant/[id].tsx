@@ -35,14 +35,14 @@ interface Merchant {
 
 interface Product {
   id: string;
-  name_ar: string;
-  name_en: string;
-  description_ar: string;
-  description_en: string;
+  name: string;
+  description: string;
   price: number;
-  image_url: string;
-  is_available: boolean;
-  preparation_time: number;
+  discount_price?: number;
+  quantity: number;
+  category?: string;
+  images?: string[];
+  is_active: boolean;
 }
 
 export default function MerchantDetailScreen() {
@@ -55,7 +55,7 @@ export default function MerchantDetailScreen() {
   useEffect(() => {
     if (id) {
       fetchMerchantData();
-      fetchMerchantProducts();
+      // fetchMerchantProducts سيتم استدعاؤها من داخل fetchMerchantData
     }
   }, [id]);
 
@@ -69,19 +69,24 @@ export default function MerchantDetailScreen() {
 
       if (error) throw error;
       setMerchant(data);
+      
+      // جلب المنتجات باستخدام store_id (معرف المتجر الفعلي)
+      if (data?.id) {
+        fetchMerchantProducts(data.id);
+      }
     } catch (error) {
       console.error('Error fetching merchant:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء تحميل بيانات المتجر');
     }
   };
 
-  const fetchMerchantProducts = async () => {
+  const fetchMerchantProducts = async (storeId: string) => {
     try {
       const { data, error } = await supabase
-        .from('merchant_products')
+        .from('products')
         .select('*')
-        .eq('merchant_id', id)
-        .eq('is_available', true);
+        .eq('store_id', storeId)  // استخدام store_id لجلب منتجات المتجر المحدد فقط
+        .eq('is_active', true);
 
       if (error) throw error;
       setProducts(data || []);
@@ -93,9 +98,23 @@ export default function MerchantDetailScreen() {
   };
 
   const addToCart = (productId: string) => {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+    
+    const currentQuantity = cart[productId] || 0;
+    
+    // التحقق من الكمية المتاحة
+    if (currentQuantity >= product.quantity) {
+      Alert.alert(
+        'غير متاح',
+        `الكمية المتاحة فقط: ${product.quantity}`
+      );
+      return;
+    }
+    
     setCart(prev => ({
       ...prev,
-      [productId]: (prev[productId] || 0) + 1
+      [productId]: currentQuantity + 1
     }));
   };
 
@@ -118,7 +137,8 @@ export default function MerchantDetailScreen() {
   const getTotalPrice = () => {
     return Object.entries(cart).reduce((sum, [productId, count]) => {
       const product = products.find(p => p.id === productId);
-      return sum + (product ? product.price * count : 0);
+      const price = product?.discount_price || product?.price || 0;
+      return sum + (price * count);
     }, 0);
   };
 
@@ -184,11 +204,10 @@ export default function MerchantDetailScreen() {
           <View style={styles.deliveryInfo}>
             <Text style={styles.deliveryText}>
               {merchant.delivery_fee > 0 
-                ? `توصيل ${merchant.delivery_fee} ريال` 
+                ? `توصيل ${merchant.delivery_fee} جنيه` 
                 : 'توصيل مجاني'}
-            </Text>
-            <Text style={styles.minOrderText}>
-              الحد الأدنى للطلب: {merchant.min_order_amount} ريال
+              •  
+              الحد الأدنى للطلب: {merchant.min_order_amount} جنيه
             </Text>
           </View>
           
@@ -211,18 +230,31 @@ export default function MerchantDetailScreen() {
               data={products}
               renderItem={({ item }) => (
                 <View style={styles.productCard}>
-                  {item.image_url ? (
-                    <Image source={{ uri: item.image_url }} style={styles.productImage} />
+                  {item.images && item.images.length > 0 ? (
+                    <Image source={{ uri: item.images[0] }} style={styles.productImage} />
                   ) : (
                     <View style={[styles.productImage, styles.placeholderImage]} />
                   )}
                   
                   <View style={styles.productInfo}>
-                    <Text style={styles.productName}>{item.name_ar}</Text>
+                    <Text style={styles.productName}>{item.name}</Text>
                     <Text style={styles.productDescription} numberOfLines={2}>
-                      {item.description_ar}
+                      {item.description || 'لا يوجد وصف'}
                     </Text>
-                    <Text style={styles.productPrice}>{item.price} ريال</Text>
+                    <Text style={styles.productPrice}>
+                      {item.discount_price ? (
+                        <>
+                          <Text style={styles.discountPrice}>{item.discount_price} جنيه</Text>
+                          {' '}
+                          <Text style={styles.originalPrice}>{item.price} جنيه</Text>
+                        </>
+                      ) : (
+                        `${item.price} جنيه`
+                      )}
+                    </Text>
+                    <Text style={styles.stockText}>
+                      متوفر: {item.quantity} قطعة
+                    </Text>
                     
                     <View style={styles.productActions}>
                       {cart[item.id] ? (
@@ -266,17 +298,18 @@ export default function MerchantDetailScreen() {
         <View style={styles.cartFooter}>
           <View style={styles.cartInfo}>
             <Text style={styles.cartItems}>{getTotalItems()} عناصر</Text>
-            <Text style={styles.cartTotal}>{getTotalPrice()} ريال</Text>
+            <Text style={styles.cartTotal}>{getTotalPrice()} جنيه</Text>
           </View>
           <TouchableOpacity 
             style={styles.checkoutButton}
             onPress={() => {
               const itemsForCheckout = Object.entries(cart).map(([productId, quantity]) => {
                 const product = products.find(p => p.id === productId);
+                const price = product?.discount_price || product?.price || 0;
                 return {
                   id: productId,
-                  name: product?.name_ar || '',
-                  price: product?.price || 0,
+                  name: product?.name || '',
+                  price: price,
                   quantity,
                 };
               });
@@ -464,7 +497,22 @@ const styles = StyleSheet.create({
   productPrice: {
     ...typography.bodyMedium,
     color: colors.primary,
+    marginBottom: spacing.xs,
+  },
+  stockText: {
+    ...typography.small,
+    color: colors.textLight,
     marginBottom: spacing.sm,
+  },
+  discountPrice: {
+    ...typography.bodyMedium,
+    color: colors.error,
+    fontWeight: 'bold',
+  },
+  originalPrice: {
+    ...typography.small,
+    color: colors.textLight,
+    textDecorationLine: 'line-through',
   },
   productActions: {
     alignItems: 'flex-start',

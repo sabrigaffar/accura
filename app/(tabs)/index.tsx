@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,25 +10,30 @@ import {
   FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapPin, Search, UtensilsCrossed, ShoppingCart, Pill, Gift, Grid3x3 } from 'lucide-react-native';
+import { MapPin, Search, UtensilsCrossed, ShoppingCart, Pill, Gift, Grid3x3, Store } from 'lucide-react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { Merchant } from '@/types/database';
 import { router } from 'expo-router';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const CATEGORIES = [
   { id: 'restaurant', name: 'مطاعم', icon: UtensilsCrossed, color: '#FF6B6B' },
   { id: 'grocery', name: 'بقالة', icon: ShoppingCart, color: '#4ECDC4' },
   { id: 'pharmacy', name: 'صيدلية', icon: Pill, color: '#45B7D1' },
   { id: 'gifts', name: 'هدايا', icon: Gift, color: '#FFA07A' },
-  { id: 'all', name: 'الكل', icon: Grid3x3, color: colors.textLight },
+  { id: 'other', name: 'أخرى', icon: Store, color: '#95A5A6' },
+  { id: 'all', name: 'الكل', icon: Grid3x3, color: '#95A5A6' },
 ];
 
 export default function HomeScreen() {
+  const { theme } = useTheme();
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   useEffect(() => {
     fetchMerchants();
@@ -68,7 +73,7 @@ export default function HomeScreen() {
           <Image source={{ uri: item.logo_url }} style={styles.merchantLogo} />
         ) : (
           <View style={[styles.merchantLogo, styles.placeholderLogo]}>
-            <UtensilsCrossed size={32} color={colors.textLight} />
+            <UtensilsCrossed size={32} color={theme.textLight} />
           </View>
         )}
       </View>
@@ -83,7 +88,7 @@ export default function HomeScreen() {
         </View>
         <View style={styles.deliveryFeeContainer}>
           <Text style={styles.deliveryFee}>
-            {item.delivery_fee === 0 ? 'توصيل مجاني' : `${item.delivery_fee} ر.س توصيل`}
+            {item.delivery_fee === 0 ? 'توصيل مجاني' : `${item.delivery_fee} جنيه توصيل`}
           </Text>
         </View>
         {!item.is_open && (
@@ -99,7 +104,7 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <View style={styles.locationBar}>
-          <MapPin size={20} color={colors.primary} />
+          <MapPin size={20} color={theme.primary} />
           <View style={styles.locationText}>
             <Text style={styles.locationLabel}>التوصيل إلى</Text>
             <Text style={styles.locationValue}>الرياض، حي النخيل</Text>
@@ -108,21 +113,18 @@ export default function HomeScreen() {
 
         <View style={styles.searchBarContainer}>
           <View style={styles.searchBar}>
-            <Search size={20} color={colors.textLight} />
+            <Search size={20} color={theme.textLight} />
             <TextInput
               style={styles.searchInput}
               placeholder="ابحث عن مطعم أو منتج..."
               value={searchQuery}
               onChangeText={setSearchQuery}
-              placeholderTextColor={colors.textLight}
+              placeholderTextColor={theme.textLight}
             />
           </View>
-          {/* <TouchableOpacity 
-            style={styles.cartButton}
-            onPress={() => router.push('/cart')}
-          >
-            <ShoppingCart size={24} color={colors.white} />
-          </TouchableOpacity> */}
+          <TouchableOpacity style={styles.cartButton}>
+            <ShoppingCart size={24} color="#FFFFFF" />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -205,17 +207,17 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   locationBar: {
     flexDirection: 'row',
@@ -227,11 +229,11 @@ const styles = StyleSheet.create({
   },
   locationLabel: {
     ...typography.small,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   locationValue: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
   },
   searchBarContainer: {
     flexDirection: 'row',
@@ -242,7 +244,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing.md,
     height: 48,
@@ -250,7 +252,7 @@ const styles = StyleSheet.create({
   cartButton: {
     width: 48,
     height: 48,
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     borderRadius: borderRadius.md,
     justifyContent: 'center',
     alignItems: 'center',
@@ -258,6 +260,7 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     ...typography.body,
+    color: theme.text,
     marginRight: spacing.sm,
     textAlign: 'right',
   },
@@ -268,19 +271,19 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   banner: {
-    backgroundColor: colors.secondary,
+    backgroundColor: theme.secondary,
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
     ...shadows.small,
   },
   bannerText: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.xs,
   },
   bannerSubtext: {
     ...typography.body,
-    color: colors.text,
+    color: theme.text,
   },
   section: {
     marginTop: spacing.md,
@@ -293,11 +296,11 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
   },
   sectionCount: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     marginRight: spacing.xs,
   },
   categoriesContainer: {
@@ -321,11 +324,11 @@ const styles = StyleSheet.create({
   },
   categoryName: {
     ...typography.caption,
-    color: colors.text,
+    color: theme.text,
   },
   categoryNameSelected: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
   },
   merchantRow: {
     justifyContent: 'space-between',
@@ -334,7 +337,7 @@ const styles = StyleSheet.create({
   },
   merchantCard: {
     width: '48%',
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
     ...shadows.small,
@@ -342,7 +345,7 @@ const styles = StyleSheet.create({
   merchantImage: {
     width: '100%',
     height: 120,
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
   },
   merchantLogo: {
     width: '100%',
@@ -357,7 +360,7 @@ const styles = StyleSheet.create({
   },
   merchantName: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.xs,
   },
   merchantMeta: {
@@ -367,36 +370,36 @@ const styles = StyleSheet.create({
   },
   rating: {
     ...typography.small,
-    color: colors.text,
+    color: theme.text,
   },
   metaDivider: {
     ...typography.small,
-    color: colors.textLight,
+    color: theme.textLight,
     marginHorizontal: spacing.xs,
   },
   deliveryTime: {
     ...typography.small,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   deliveryFeeContainer: {
     marginTop: spacing.xs,
   },
   deliveryFee: {
     ...typography.caption,
-    color: colors.primary,
+    color: theme.primary,
   },
   closedBadge: {
     position: 'absolute',
     top: spacing.sm,
     left: spacing.sm,
-    backgroundColor: colors.error + 'DD',
+    backgroundColor: theme.error + 'DD',
     borderRadius: borderRadius.sm,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
   },
   closedText: {
     ...typography.small,
-    color: colors.white,
+    color: '#FFFFFF',
   },
   loadingContainer: {
     padding: spacing.xxl,
@@ -404,7 +407,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   emptyContainer: {
     padding: spacing.xxl,
@@ -412,6 +415,6 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
 });

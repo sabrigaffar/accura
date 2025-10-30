@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,12 +8,14 @@ import {
   RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Package, Clock, CheckCircle, XCircle } from 'lucide-react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { Order } from '@/types/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface OrderWithMerchant extends Order {
   merchant?: {
@@ -34,10 +36,24 @@ const ORDER_STATUS_CONFIG = {
 
 export default function OrdersScreen() {
   const { user } = useAuth();
+  const { theme } = useTheme();
   const [orders, setOrders] = useState<OrderWithMerchant[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'active' | 'completed'>('active');
+
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
+  const ORDER_STATUS_CONFIG = useMemo(() => ({
+    pending: { label: 'قيد الانتظار', color: theme.warning, icon: Clock },
+    accepted: { label: 'تم القبول', color: theme.primary, icon: CheckCircle },
+    preparing: { label: 'قيد التحضير', color: theme.primary, icon: Package },
+    ready: { label: 'جاهز', color: theme.primary, icon: CheckCircle },
+    picked_up: { label: 'تم الاستلام', color: theme.primary, icon: Package },
+    on_the_way: { label: 'في الطريق', color: theme.primary, icon: Package },
+    delivered: { label: 'تم التوصيل', color: theme.success, icon: CheckCircle },
+    cancelled: { label: 'ملغي', color: theme.error, icon: XCircle },
+  }), [theme]);
 
   useEffect(() => {
     if (user) {
@@ -45,15 +61,31 @@ export default function OrdersScreen() {
     }
   }, [user, activeTab]);
 
+  // إعادة تحميل الطلبات عند العودة للصفحة (مهم لعرض الطلبات الجديدة)
+  useFocusEffect(
+    useCallback(() => {
+      console.log('🔄 Orders screen focused - refreshing orders...');
+      if (user) {
+        fetchOrders();
+      }
+    }, [user, activeTab])
+  );
+
   const fetchOrders = async () => {
-    if (!user) return;
+    if (!user) {
+      console.log('❌ No user - cannot fetch orders');
+      return;
+    }
+
+    console.log('🔍 Fetching orders for user:', user.id);
+    console.log('🔍 Active tab:', activeTab);
 
     setLoading(true);
     let query = supabase
       .from('orders')
       .select(`
         *,
-        merchant:merchants(name_ar)
+        merchant:merchants!orders_merchant_id_fkey(name_ar)
       `)
       .eq('customer_id', user.id)
       .order('created_at', { ascending: false });
@@ -66,9 +98,23 @@ export default function OrdersScreen() {
 
     const { data, error } = await query;
 
-    if (data) {
-      setOrders(data);
+    console.log('📦 Orders query result:', {
+      count: data?.length || 0,
+      data: data,
+      error: error
+    });
+
+    if (error) {
+      console.error('❌ Error fetching orders:', error);
     }
+
+    if (data) {
+      console.log(`✅ Setting ${data.length} orders to state`);
+      setOrders(data);
+    } else {
+      console.log('⚠️ No data returned from query');
+    }
+    
     setLoading(false);
     setRefreshing(false);
   };
@@ -79,8 +125,8 @@ export default function OrdersScreen() {
   };
 
   const renderOrderCard = ({ item }: { item: OrderWithMerchant }) => {
-    const statusConfig = ORDER_STATUS_CONFIG[item.status];
-    const StatusIcon = statusConfig.icon;
+    const statusConfig = ORDER_STATUS_CONFIG[item.status as keyof typeof ORDER_STATUS_CONFIG];
+    const StatusIcon = statusConfig?.icon || Package;
 
     return (
       <TouchableOpacity
@@ -114,7 +160,7 @@ export default function OrdersScreen() {
           <View style={styles.orderFooter}>
             <View style={styles.totalContainer}>
               <Text style={styles.totalLabel}>الإجمالي:</Text>
-              <Text style={styles.totalAmount}>{item.total.toFixed(2)} ر.س</Text>
+              <Text style={styles.totalAmount}>{item.total.toFixed(2)} جنيه</Text>
             </View>
             {item.payment_method === 'cash' && (
               <View style={styles.paymentBadge}>
@@ -158,7 +204,7 @@ export default function OrdersScreen() {
         </View>
       ) : orders.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Package size={64} color={colors.textLight} />
+          <Package size={64} color={theme.textLight} />
           <Text style={styles.emptyTitle}>لا توجد طلبات</Text>
           <Text style={styles.emptyText}>
             {activeTab === 'active' ? 'ليس لديك طلبات حالية' : 'ليس لديك طلبات سابقة'}
@@ -179,26 +225,26 @@ export default function OrdersScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   headerTitle: {
     ...typography.h2,
-    color: colors.text,
+    color: theme.text,
     textAlign: 'center',
   },
   tabsContainer: {
     flexDirection: 'row',
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.sm,
   },
@@ -210,21 +256,21 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   tabActive: {
-    borderBottomColor: colors.primary,
+    borderBottomColor: theme.primary,
   },
   tabText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   tabTextActive: {
     ...typography.bodyMedium,
-    color: colors.primary,
+    color: theme.primary,
   },
   listContent: {
     padding: spacing.md,
   },
   orderCard: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     borderRadius: borderRadius.lg,
     marginBottom: spacing.md,
     overflow: 'hidden',
@@ -235,7 +281,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: spacing.md,
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
   },
   orderNumber: {
     flexDirection: 'row',
@@ -243,7 +289,7 @@ const styles = StyleSheet.create({
   },
   orderNumberText: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
   },
   statusBadge: {
     flexDirection: 'row',
@@ -264,12 +310,12 @@ const styles = StyleSheet.create({
   },
   merchantName: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.xs,
   },
   orderDate: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   orderFooter: {
     flexDirection: 'row',
@@ -277,7 +323,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
+    borderTopColor: theme.border,
   },
   totalContainer: {
     flexDirection: 'row',
@@ -285,22 +331,22 @@ const styles = StyleSheet.create({
   },
   totalLabel: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     marginLeft: spacing.xs,
   },
   totalAmount: {
     ...typography.h3,
-    color: colors.primary,
+    color: theme.primary,
   },
   paymentBadge: {
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
     borderRadius: borderRadius.sm,
   },
   paymentText: {
     ...typography.caption,
-    color: colors.text,
+    color: theme.text,
   },
   emptyContainer: {
     flex: 1,
@@ -310,13 +356,13 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     marginTop: spacing.md,
     marginBottom: spacing.xs,
   },
   emptyText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     textAlign: 'center',
   },
 });

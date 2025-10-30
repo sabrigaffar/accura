@@ -32,7 +32,7 @@ export default function OffersScreen() {
           <View style={styles.offerContent}>
             <Text style={styles.offerTitle}>توصيل مجاني</Text>
             <Text style={styles.offerDescription}>
-              احصل على توصيل مجاني للطلبات فوق 100 ريال
+              احصل على توصيل مجاني للطلبات فوق 1000 جنيه
             </Text>
             <Text style={styles.offerCode}>كود: FREEDEL</Text>
           </View>

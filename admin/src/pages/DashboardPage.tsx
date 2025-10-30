@@ -19,34 +19,10 @@ import { PERMISSIONS, usePermissions } from '../contexts/PermissionsContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import SystemHealth from '../components/SystemHealth';
 
-// بيانات تجريبية للإحصائيات
-const statsData = [
-  { name: 'يناير', users: 400, orders: 240, revenue: 24000 },
-  { name: 'فبراير', users: 300, orders: 138, revenue: 13800 },
-  { name: 'مارس', users: 200, orders: 980, revenue: 98000 },
-  { name: 'أبريل', users: 278, orders: 390, revenue: 39000 },
-  { name: 'مايو', users: 189, orders: 480, revenue: 48000 },
-  { name: 'يونيو', users: 239, orders: 380, revenue: 38000 },
-  { name: 'يوليو', users: 349, orders: 430, revenue: 43000 },
-];
-
-// بيانات تجريبية لنسب المستخدمين
-const userTypesData = [
-  { name: 'عملاء', value: 400 },
-  { name: 'تجار', value: 300 },
-  { name: 'سائقين', value: 200 },
-  { name: 'مدراء', value: 10 },
-];
-
-// بيانات تجريبية لنمو الطلبات
-const ordersGrowthData = [
-  { date: '2023-01', orders: 120 },
-  { date: '2023-02', orders: 150 },
-  { date: '2023-03', orders: 180 },
-  { date: '2023-04', orders: 210 },
-  { date: '2023-05', orders: 240 },
-  { date: '2023-06', orders: 280 },
-];
+// بيانات فارغة - سيتم ملؤها من قاعدة البيانات
+const statsData: any[] = [];
+const userTypesData: any[] = [];
+const ordersGrowthData: any[] = [];
 
 // ألوان للرسم البياني الدائري
 const COLORS = ['#00B074', '#FFD84D', '#0088FE', '#FF6B6B'];

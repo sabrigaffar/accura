@@ -15,6 +15,8 @@ import { MapPin, Plus, Edit3, Trash2 } from 'lucide-react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useLocation } from '@/hooks/useLocation';
+import { ActivityIndicator } from 'react-native';
 
 interface Address {
   id: string;
@@ -24,10 +26,12 @@ interface Address {
   district?: string;
   building_number?: string;
   floor_number?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export default function AddressesScreen() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -38,6 +42,10 @@ export default function AddressesScreen() {
   const [district, setDistrict] = useState('');
   const [buildingNumber, setBuildingNumber] = useState('');
   const [floorNumber, setFloorNumber] = useState('');
+  const location = useLocation();
+  const [currentLatitude, setCurrentLatitude] = useState<number | null>(null);
+  const [currentLongitude, setCurrentLongitude] = useState<number | null>(null);
+  const [detectingLocation, setDetectingLocation] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -45,10 +53,76 @@ export default function AddressesScreen() {
     }
   }, [user]);
 
+  // تحديد الموقع تلقائياً عند فتح الـ Modal
+  useEffect(() => {
+    if (showModal && !editingAddress) {
+      // عند إضافة عنوان جديد - حاول تحديد الموقع تلقائياً
+      autoDetectLocation();
+    }
+  }, [showModal]);
+
+  const autoDetectLocation = async () => {
+    setDetectingLocation(true);
+    try {
+      const currentLocation = await location.getCurrentLocation();
+      if (currentLocation) {
+        setCurrentLatitude(currentLocation.latitude);
+        setCurrentLongitude(currentLocation.longitude);
+      } else {
+        Alert.alert(
+          '⚠️ تحديد الموقع مطلوب',
+          'لم نتمكن من تحديد موقعك تلقائياً. الرجاء الضغط على زر "تحديد موقعي" لحساب رسوم التوصيل بدقة.\n\nملاحظة: تحديد الموقع إجباري.',
+          [{ text: 'حسناً' }]
+        );
+      }
+    } catch (error) {
+      console.error('Error auto-detecting location:', error);
+    } finally {
+      setDetectingLocation(false);
+    }
+  };
+
+  const manualDetectLocation = async () => {
+    setDetectingLocation(true);
+    try {
+      const currentLocation = await location.getCurrentLocation();
+      if (currentLocation) {
+        setCurrentLatitude(currentLocation.latitude);
+        setCurrentLongitude(currentLocation.longitude);
+        Alert.alert(
+          '✅ تم تحديد الموقع',
+          `تم تحديد موقعك بنجاح!\n\nخط العرض: ${currentLocation.latitude.toFixed(6)}\nخط الطول: ${currentLocation.longitude.toFixed(6)}`,
+          [{ text: 'ممتاز!' }]
+        );
+      } else {
+        Alert.alert(
+          'خطأ',
+          'لم نتمكن من تحديد موقعك. تأكد من:\n• تفعيل خدمات الموقع\n• السماح للتطبيق بالوصول للموقع',
+          [{ text: 'حسناً' }]
+        );
+      }
+    } catch (error) {
+      console.error('Error detecting location:', error);
+      Alert.alert('خطأ', 'فشل في تحديد الموقع');
+    } finally {
+      setDetectingLocation(false);
+    }
+  };
+
   const addAddress = async () => {
     if (!user) return;
     if (!title.trim() || !street.trim() || !city.trim()) {
       Alert.alert('خطأ', 'الرجاء إدخال العنوان، الشارع، والمدينة');
+      return;
+    }
+
+    // التحقق من تحديد الموقع
+    if (!currentLatitude || !currentLongitude) {
+      Alert.alert(
+        '⚠️ تحديد الموقع مطلوب',
+        'الرجاء تحديد موقعك أولاً لحساب رسوم التوصيل بدقة.\n\nاضغط على زر "تحديد موقعي" أدناه.',
+        [{ text: 'حسناً' }]
+      );
       return;
     }
 
@@ -63,6 +137,8 @@ export default function AddressesScreen() {
           district: district.trim() || null,
           building_number: buildingNumber.trim() || null,
           floor_number: floorNumber.trim() || null,
+          latitude: currentLatitude,
+          longitude: currentLongitude,
           is_default: addresses.length === 0,
         })
         .select('*')
@@ -71,6 +147,19 @@ export default function AddressesScreen() {
       if (error) throw error;
 
       setAddresses(prev => [data as Address, ...prev]);
+      
+      // مزامنة عنوان المتجر إذا كان المستخدم تاجرًا
+      if (profile?.user_type === 'merchant') {
+        try {
+          const parts = [city.trim(), district.trim(), street.trim()].filter(Boolean).join(', ');
+          const formatted = buildingNumber.trim() ? `${parts}, عمارة ${buildingNumber.trim()}` : parts;
+          await supabase
+            .from('merchants')
+            .update({ address: formatted, updated_at: new Date().toISOString() })
+            .eq('owner_id', user.id);
+        } catch {}
+      }
+
       closeModal();
       Alert.alert('نجاح', 'تم إضافة العنوان بنجاح');
     } catch (error: any) {
@@ -106,6 +195,19 @@ export default function AddressesScreen() {
       setAddresses(prev => prev.map(addr => 
         addr.id === editingAddress.id ? data as Address : addr
       ));
+      
+      // مزامنة عنوان المتجر إذا كان المستخدم تاجرًا
+      if (profile?.user_type === 'merchant') {
+        try {
+          const parts = [city.trim(), district.trim(), street.trim()].filter(Boolean).join(', ');
+          const formatted = buildingNumber.trim() ? `${parts}, عمارة ${buildingNumber.trim()}` : parts;
+          await supabase
+            .from('merchants')
+            .update({ address: formatted, updated_at: new Date().toISOString() })
+            .eq('owner_id', user.id);
+        } catch {}
+      }
+
       closeModal();
       Alert.alert('نجاح', 'تم تحديث العنوان بنجاح');
     } catch (error: any) {
@@ -306,6 +408,35 @@ export default function AddressesScreen() {
               </View>
             </ScrollView>
 
+            {/* زر تحديد الموقع */}
+            <View style={styles.locationSection}>
+              <TouchableOpacity
+                style={[
+                  styles.locationButton,
+                  (currentLatitude && currentLongitude) ? styles.locationButtonSuccess : null,
+                  detectingLocation ? styles.locationButtonDisabled : null
+                ]}
+                onPress={manualDetectLocation}
+                disabled={detectingLocation}
+              >
+                {detectingLocation ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <>
+                    <MapPin size={20} color={colors.white} />
+                    <Text style={styles.locationButtonText}>
+                      {currentLatitude && currentLongitude ? '✅ تم تحديد الموقع' : '📍 تحديد موقعي (إجباري)'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              {currentLatitude && currentLongitude && (
+                <Text style={styles.locationHint}>
+                  📍 تم تحديد موقعك بنجاح
+                </Text>
+              )}
+            </View>
+
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
@@ -499,5 +630,37 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.text,
     marginBottom: spacing.xs,
+  },
+  locationSection: {
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  locationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.error,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    gap: spacing.sm,
+    ...shadows.small,
+  },
+  locationButtonSuccess: {
+    backgroundColor: colors.success,
+  },
+  locationButtonDisabled: {
+    opacity: 0.6,
+  },
+  locationButtonText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    fontWeight: '600',
+  },
+  locationHint: {
+    ...typography.caption,
+    color: colors.success,
+    textAlign: 'center',
+    marginTop: spacing.xs,
   },
 });

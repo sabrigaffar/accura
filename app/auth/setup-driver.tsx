@@ -23,7 +23,7 @@ const VEHICLE_TYPES = [
 ];
 
 export default function SetupDriverScreen() {
-  const { user, profile } = useAuth();
+  const { user, profile, refreshProfile } = useAuth();
   const [vehicleType, setVehicleType] = useState('');
   const [vehicleModel, setVehicleModel] = useState('');
   const [vehicleColor, setVehicleColor] = useState('');
@@ -98,6 +98,9 @@ export default function SetupDriverScreen() {
         throw profileError;
       }
 
+      // تحديث AuthContext ليعكس user_type الجديد
+      await refreshProfile();
+
       setLoading(false);
       Alert.alert(
         'تم بنجاح',
@@ -105,7 +108,11 @@ export default function SetupDriverScreen() {
         [
           {
             text: 'متابعة',
-            onPress: () => router.replace('/(tabs)/orders'),
+            onPress: () => {
+              setTimeout(() => {
+                router.replace('/(driver-tabs)');
+              }, 100);
+            },
           },
         ]
       );

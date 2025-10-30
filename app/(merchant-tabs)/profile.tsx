@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Store, LogOut, Settings, Bell, HelpCircle } from 'lucide-react-native';
+import { User, Store, LogOut, Settings, Bell, HelpCircle, Key } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
@@ -40,6 +40,12 @@ export default function MerchantProfile() {
       title: 'معلومات الحساب',
       subtitle: 'البريد الإلكتروني ورقم الهاتف',
       onPress: () => router.push('/profile/merchant-account-info' as any),
+    },
+    {
+      icon: Key,
+      title: 'تغيير كلمة المرور',
+      subtitle: 'تحديث كلمة مرور حسابك',
+      onPress: () => router.push('/settings/change-password' as any),
     },
     {
       icon: Bell,

@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, ActivityIndicator, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { ArrowLeft, Upload, X } from 'lucide-react-native';
-import { colors, spacing, typography, borderRadius } from '@/constants/theme';
+import { ArrowLeft, Upload, X, ChevronDown, Store, Check } from 'lucide-react-native';
+import { colors, spacing, typography, borderRadius, shadows } from '@/constants/theme';
+import { useActiveStore } from '@/contexts/ActiveStoreContext';
 import { supabase } from '@/lib/supabase';
 import * as ImagePicker from 'expo-image-picker';
+import { uploadMultipleImages } from '@/lib/imageUpload';
 
 const CATEGORIES = [
   'إلكترونيات',
@@ -27,6 +29,17 @@ export default function AddProductScreen() {
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const { activeStore, stores } = useActiveStore();
+  const [selectedStore, setSelectedStore] = useState<any>(null);
+  const [showStorePicker, setShowStorePicker] = useState(false);
+
+  useEffect(() => {
+    if (activeStore) {
+      setSelectedStore(activeStore);
+    } else if (stores.length > 0) {
+      setSelectedStore(stores[0]);
+    }
+  }, [activeStore, stores]);
 
   const pickImages = async () => {
     try {
@@ -87,24 +100,59 @@ export default function AddProductScreen() {
         return;
       }
 
-      // في الإصدار الحقيقي، يجب رفع الصور إلى Supabase Storage
-      // الآن سنحفظ روابط الصور مباشرة (للتبسيط)
+      if (!selectedStore) {
+        Alert.alert('خطأ', 'الرجاء اختيار المتجر الذي تريد إضافة المنتج إليه');
+        return;
+      }
+
+      // رفع الصور إلى Supabase Storage
+      let uploadedImageUrls: string[] = [];
+      if (images.length > 0) {
+        console.log('Uploading images to Storage...');
+        uploadedImageUrls = await uploadMultipleImages(images, user.id);
+        console.log('Uploaded URLs:', uploadedImageUrls);
+        
+        if (uploadedImageUrls.length === 0 && images.length > 0) {
+          Alert.alert('تحذير', 'حدث خطأ في رفع الصور. سيتم حفظ المنتج بدون صور.');
+        } else if (uploadedImageUrls.length < images.length) {
+          Alert.alert('تحذير', `تم رفع ${uploadedImageUrls.length} من ${images.length} صور فقط.`);
+        }
+      }
       
-      const { data, error } = await supabase
+      // إنشاء بيانات المنتج مع الروابط العامة للصور
+      let insertPayload: any = {
+        merchant_id: user.id,
+        name: name.trim(),
+        description: description.trim(),
+        price: parseFloat(price),
+        discount_price: discountPrice ? parseFloat(discountPrice) : null,
+        quantity: parseInt(quantity),
+        category,
+        images: uploadedImageUrls,  // استخدام الروابط العامة من Storage
+        is_active: true,
+      };
+
+      // نضيف store_id من المتجر المختار
+      insertPayload.store_id = selectedStore.id;
+
+      let { data, error } = await supabase
         .from('products')
-        .insert({
-          merchant_id: user.id,
-          name: name.trim(),
-          description: description.trim(),
-          price: parseFloat(price),
-          discount_price: discountPrice ? parseFloat(discountPrice) : null,
-          quantity: parseInt(quantity),
-          category,
-          images: images,
-          is_active: true,
-        })
+        .insert(insertPayload)
         .select()
         .single();
+
+      // في حال فشل بسبب عدم وجود العمود، أعد المحاولة بدون store_id
+      if (error && (error as any).code === '42703') {
+        const fallbackPayload = { ...insertPayload };
+        delete (fallbackPayload as any).store_id;
+        const retry = await supabase
+          .from('products')
+          .insert(fallbackPayload)
+          .select()
+          .single();
+        data = retry.data as any;
+        error = retry.error as any;
+      }
 
       if (error) throw error;
 
@@ -137,6 +185,69 @@ export default function AddProductScreen() {
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {/* اختيار المتجر */}
+        <View style={styles.section}>
+          <Text style={styles.label}>اختر المتجر *</Text>
+          <TouchableOpacity 
+            style={styles.storeSelectorButton}
+            onPress={() => setShowStorePicker(true)}
+          >
+            <Store size={20} color={colors.primary} />
+            <Text style={styles.storeSelectorText}>
+              {selectedStore ? selectedStore.name_ar : 'اختر المتجر'}
+            </Text>
+            <ChevronDown size={20} color={colors.textLight} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Store Picker Modal */}
+        <Modal
+          visible={showStorePicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowStorePicker(false)}
+        >
+          <TouchableOpacity 
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowStorePicker(false)}
+          >
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Store size={20} color={colors.primary} />
+                <Text style={styles.modalTitle}>اختر المتجر</Text>
+              </View>
+              <ScrollView style={styles.storesList}>
+                {stores.map((store) => (
+                  <TouchableOpacity
+                    key={store.id}
+                    style={[
+                      styles.storeItem,
+                      selectedStore?.id === store.id && styles.activeStoreItem,
+                    ]}
+                    onPress={() => {
+                      setSelectedStore(store);
+                      setShowStorePicker(false);
+                    }}
+                  >
+                    <View style={styles.storeInfo}>
+                      <Text style={[
+                        styles.storeName,
+                        selectedStore?.id === store.id && styles.activeStoreName,
+                      ]}>
+                        {store.name_ar}
+                      </Text>
+                      <Text style={styles.storeCategory}>{store.category}</Text>
+                    </View>
+                    {selectedStore?.id === store.id && (
+                      <Check size={20} color={colors.primary} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
         {/* الصور */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>صور المنتج (اختياري)</Text>
@@ -301,6 +412,24 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: spacing.lg,
   },
+  activeStoreInfo: {
+    backgroundColor: colors.primary + '10',
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.primary + '30',
+  },
+  activeStoreLabel: {
+    ...typography.caption,
+    color: colors.textLight,
+    marginBottom: spacing.xs,
+  },
+  activeStoreName: {
+    ...typography.h3,
+    color: colors.primary,
+    fontWeight: '600',
+  },
   section: {
     marginBottom: spacing.lg,
   },
@@ -430,5 +559,72 @@ const styles = StyleSheet.create({
     ...typography.bodyMedium,
     color: colors.white,
     fontWeight: '600',
+  },
+  storeSelectorButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  storeSelectorText: {
+    flex: 1,
+    ...typography.body,
+    color: colors.text,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  modalContent: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.lg,
+    width: '100%',
+    maxWidth: 400,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: spacing.sm,
+  },
+  modalTitle: {
+    ...typography.h3,
+    color: colors.text,
+  },
+  storesList: {
+    maxHeight: 400,
+  },
+  storeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  activeStoreItem: {
+    backgroundColor: colors.primary + '10',
+  },
+  storeInfo: {
+    flex: 1,
+  },
+  storeName: {
+    ...typography.bodyMedium,
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  storeCategory: {
+    ...typography.caption,
+    color: colors.textLight,
   },
 });

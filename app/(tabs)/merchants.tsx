@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { Search, Filter, UtensilsCrossed } from 'lucide-react-native';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface Merchant {
   id: string;
@@ -21,6 +22,7 @@ interface Merchant {
   description_ar: string;
   category: string;
   logo_url: string;
+  banner_url?: string;
   rating: number;
   delivery_fee: number;
   min_order_amount: number;
@@ -28,11 +30,14 @@ interface Merchant {
 }
 
 export default function MerchantsScreen() {
+  const { theme } = useTheme();
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [filteredMerchants, setFilteredMerchants] = useState<Merchant[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   useEffect(() => {
     fetchMerchants();
@@ -45,15 +50,14 @@ export default function MerchantsScreen() {
   const fetchMerchants = async () => {
     try {
       setLoading(true);
+      // Use RPC to fetch only merchants with active subscription or within trial (SECURITY DEFINER on server)
       const { data, error } = await supabase
-        .from('merchants')
-        .select('*')
-        .eq('is_active', true);
+        .rpc('list_active_merchants');
 
       if (error) throw error;
 
-      setMerchants(data || []);
-      setFilteredMerchants(data || []);
+      setMerchants((data as any) || []);
+      setFilteredMerchants((data as any) || []);
     } catch (error) {
       console.error('Error fetching merchants:', error);
     } finally {
@@ -96,7 +100,7 @@ export default function MerchantsScreen() {
           <Image source={{ uri: item.logo_url }} style={styles.merchantLogo} />
         ) : (
           <View style={[styles.merchantLogo, styles.placeholderLogo]}>
-            <UtensilsCrossed size={32} color={colors.textLight} />
+            <UtensilsCrossed size={32} color={theme.textLight} />
           </View>
         )}
       </View>
@@ -108,7 +112,7 @@ export default function MerchantsScreen() {
         <View style={styles.merchantDetails}>
           <Text style={styles.rating}>⭐ {item.rating}</Text>
           <Text style={styles.deliveryInfo}>
-            {item.delivery_fee > 0 ? `${item.delivery_fee} ريال توصيل` : 'توصيل مجاني'}
+            {item.delivery_fee > 0 ? `${item.delivery_fee} جنيه توصيل` : 'توصيل مجاني'}
           </Text>
         </View>
       </View>
@@ -119,7 +123,7 @@ export default function MerchantsScreen() {
   if (loading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <ActivityIndicator size="large" color={theme.primary} />
       </View>
     );
   }
@@ -129,17 +133,17 @@ export default function MerchantsScreen() {
       {/* شريط البحث */}
       <View style={styles.searchContainer}>
         <View style={styles.searchInputContainer}>
-          <Search size={20} color={colors.textLight} style={styles.searchIcon} />
+          <Search size={20} color={theme.textLight} style={styles.searchIcon} />
           <TextInput
             style={styles.searchInput}
             placeholder="ابحث عن متجر..."
             value={searchQuery}
             onChangeText={setSearchQuery}
-            placeholderTextColor={colors.textLight}
+            placeholderTextColor={theme.textLight}
           />
         </View>
         <TouchableOpacity style={styles.filterButton}>
-          <Filter size={20} color={colors.white} />
+          <Filter size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
@@ -188,10 +192,10 @@ export default function MerchantsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   centerContainer: {
     flex: 1,
@@ -201,15 +205,15 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: 'row',
     padding: spacing.md,
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   searchInputContainer: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing.sm,
   },
@@ -219,13 +223,14 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     ...typography.body,
+    color: theme.text,
     height: 40,
     textAlign: 'right',
   },
   filterButton: {
     width: 40,
     height: 40,
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     borderRadius: borderRadius.md,
     justifyContent: 'center',
     alignItems: 'center',
@@ -234,38 +239,38 @@ const styles = StyleSheet.create({
   categoriesContainer: {
     flexDirection: 'row',
     padding: spacing.md,
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   categoryButton: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: borderRadius.md,
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
     marginRight: spacing.sm,
   },
   activeCategory: {
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
   },
   categoryText: {
     ...typography.caption,
-    color: colors.text,
+    color: theme.text,
   },
   activeCategoryText: {
-    color: colors.white,
+    color: '#FFFFFF',
   },
   merchantsList: {
     padding: spacing.md,
   },
   merchantCard: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     borderRadius: borderRadius.md,
     marginBottom: spacing.md,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    shadowColor: colors.black,
+    shadowColor: '#000000',
     shadowOffset: {
       width: 0,
       height: 2,
@@ -286,7 +291,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.sm,
   },
   placeholderLogo: {
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -296,12 +301,12 @@ const styles = StyleSheet.create({
   },
   merchantName: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.xs,
   },
   merchantDescription: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     marginBottom: spacing.sm,
     lineHeight: 20,
   },
@@ -311,14 +316,14 @@ const styles = StyleSheet.create({
   },
   rating: {
     ...typography.body,
-    color: colors.text,
+    color: theme.text,
   },
   deliveryInfo: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   openBadge: {
-    backgroundColor: colors.secondary,
+    backgroundColor: theme.secondary,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
     borderRadius: borderRadius.sm,
@@ -326,7 +331,7 @@ const styles = StyleSheet.create({
   },
   openText: {
     ...typography.caption,
-    color: colors.white,
+    color: '#FFFFFF',
     fontWeight: 'bold',
   },
   emptyContainer: {
@@ -337,6 +342,6 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
 });

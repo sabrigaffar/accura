@@ -1,4 +1,3 @@
-import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import DashboardLayout from './layouts/DashboardLayout';
 import LoginPage from './pages/LoginPage';
@@ -9,6 +8,9 @@ import MerchantsPage from './pages/MerchantsPage';
 import DriversPage from './pages/DriversPage';
 import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
+import MerchantSubscriptionsPage from './pages/MerchantSubscriptionsPage';
+import AdminWalletPage from './pages/AdminWalletPage';
+
 import NotificationSystem from './components/NotificationSystem';
 import { useAuth } from './contexts/AuthContext';
 
@@ -35,6 +37,8 @@ function App() {
           <Route path="drivers" element={<DriversPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="wallet" element={<AdminWalletPage />} />
+          <Route path="subscriptions" element={<MerchantSubscriptionsPage />} />
         </Route>
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} replace />} />
       </Routes>

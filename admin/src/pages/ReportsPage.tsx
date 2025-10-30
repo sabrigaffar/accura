@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -16,38 +16,45 @@ import {
 } from 'recharts';
 import DataExport from '../components/DataExport';
 import { useReportsData } from '../hooks/useSupabaseData';
+import { supabase } from '../lib/supabase';
 
 const ReportsPage = () => {
   const [reportType, setReportType] = useState('orders');
   const [dateRange, setDateRange] = useState('monthly');
 
+  // Platform revenue summary (RPC) and upcoming notifications
+  const [rev, setRev] = useState<{ total_in:number; subscriptions_in:number; per_km_in:number; service_fee_in:number; other_in:number } | null>(null);
+  const [upcoming, setUpcoming] = useState<Array<{ merchant_id:string; merchant_name:string; event:string; due_at:string | null }>>([]);
+  const [loadingKpis, setLoadingKpis] = useState<boolean>(false);
+
+  const loadKpis = async () => {
+    try {
+      setLoadingKpis(true);
+      const { data: r } = await supabase.rpc('get_platform_revenue_summary');
+      const row = r && r.length > 0 ? r[0] : null;
+      setRev(row ? {
+        total_in: Number(row.total_in || 0),
+        subscriptions_in: Number(row.subscriptions_in || 0),
+        per_km_in: Number(row.per_km_in || 0),
+        service_fee_in: Number(row.service_fee_in || 0),
+        other_in: Number(row.other_in || 0),
+      } : { total_in:0, subscriptions_in:0, per_km_in:0, service_fee_in:0, other_in:0 });
+
+      const { data: list } = await supabase.rpc('list_upcoming_billing_notifications');
+      setUpcoming(Array.isArray(list) ? list : []);
+    } finally {
+      setLoadingKpis(false);
+    }
+  };
+
+  useEffect(() => { loadKpis(); }, []);
+
   const { ordersData: ordersDataReal, usersData: usersDataReal, categoriesData: categoriesDataReal, loading, error } = useReportsData(reportType as any, dateRange as any);
 
-  // بيانات تجريبية للتقارير
-  const ordersData = [
-    { date: '2023-01', orders: 400, revenue: 24000 },
-    { date: '2023-02', orders: 300, revenue: 13800 },
-    { date: '2023-03', orders: 200, revenue: 98000 },
-    { date: '2023-04', orders: 278, revenue: 39000 },
-    { date: '2023-05', orders: 189, revenue: 48000 },
-    { date: '2023-06', orders: 239, revenue: 38000 },
-  ];
-
-  const usersData = [
-    { date: '2023-01', customers: 120, merchants: 45, drivers: 30 },
-    { date: '2023-02', customers: 150, merchants: 52, drivers: 38 },
-    { date: '2023-03', customers: 180, merchants: 60, drivers: 45 },
-    { date: '2023-04', customers: 210, merchants: 68, drivers: 52 },
-    { date: '2023-05', customers: 240, merchants: 75, drivers: 60 },
-    { date: '2023-06', customers: 280, merchants: 82, drivers: 68 },
-  ];
-
-  const categoriesData = [
-    { name: 'مطاعم', value: 400 },
-    { name: 'بقالة', value: 300 },
-    { name: 'صيدليات', value: 200 },
-    { name: 'هدايا', value: 100 },
-  ];
+  // بيانات فارغة - سيتم ملؤها من قاعدة البيانات
+  const ordersData: any[] = [];
+  const usersData: any[] = [];
+  const categoriesData: any[] = [];
 
   const COLORS = ['#00B074', '#FFD84D', '#0088FE', '#FF6B6B'];
 
@@ -73,6 +80,61 @@ const ReportsPage = () => {
 
   return (
     <div className="space-y-6">
+      {/* KPIs: Platform Revenue Summary */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="bg-white p-4 rounded shadow">
+          <div className="text-gray-500 text-sm">إجمالي الداخل</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.total_in ?? 0).toFixed(2)} EGP</div>
+        </div>
+        <div className="bg-white p-4 rounded shadow">
+          <div className="text-gray-500 text-sm">اشتراكات التجار</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.subscriptions_in ?? 0).toFixed(2)} EGP</div>
+        </div>
+        <div className="bg-white p-4 rounded shadow">
+          <div className="text-gray-500 text-sm">رسوم لكل كم</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.per_km_in ?? 0).toFixed(2)} EGP</div>
+        </div>
+        <div className="bg-white p-4 rounded shadow">
+          <div className="text-gray-500 text-sm">رسوم الخدمة</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.service_fee_in ?? 0).toFixed(2)} EGP</div>
+        </div>
+        <div className="bg-white p-4 rounded shadow">
+          <div className="text-gray-500 text-sm">أخرى</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.other_in ?? 0).toFixed(2)} EGP</div>
+        </div>
+      </div>
+
+      {/* Upcoming billing notifications */}
+      <div className="bg-white p-6 rounded-lg shadow">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-medium text-gray-900">تنبيهات قادمة (خلال يومين)</h2>
+          <button className="px-3 py-1 bg-gray-100 rounded" onClick={loadKpis} disabled={loadingKpis}>تحديث</button>
+        </div>
+        {upcoming.length === 0 ? (
+          <div className="text-gray-500">لا توجد تنبيهات قريبة</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-right">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="px-3 py-2">المتجر</th>
+                  <th className="px-3 py-2">الحدث</th>
+                  <th className="px-3 py-2">التاريخ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map((u, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="px-3 py-2">{u.merchant_name || u.merchant_id?.slice(0,8)}</td>
+                    <td className="px-3 py-2">{u.event === 'trial_ending' ? 'انتهاء التجربة' : 'استحقاق الاشتراك'}</td>
+                    <td className="px-3 py-2">{u.due_at ? new Date(u.due_at).toLocaleString('ar-EG') : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <h1 className="text-2xl font-bold text-gray-900">التقارير والإحصائيات</h1>
         <div className="flex gap-2">
@@ -193,7 +255,7 @@ const ReportsPage = () => {
                     dataKey="value"
                     label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                   >
-                    {categoriesDataToShow.map((entry, index) => (
+                    {categoriesDataToShow.map((_entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>

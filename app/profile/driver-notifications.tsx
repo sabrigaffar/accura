@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ArrowLeft, Bell, Package, DollarSign, MessageSquare, Volume2 } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const NOTIFICATIONS_KEY = '@driver_notifications';
 
 export default function DriverNotifications() {
   const [notifications, setNotifications] = useState({
@@ -22,8 +25,32 @@ export default function DriverNotifications() {
     vibration: true,
   });
 
-  const toggleNotification = (key: keyof typeof notifications) => {
-    setNotifications((prev) => ({ ...prev, [key]: !prev[key] }));
+  // تحميل الإعدادات عند فتح الصفحة
+  useEffect(() => {
+    loadNotificationSettings();
+  }, []);
+
+  const loadNotificationSettings = async () => {
+    try {
+      const saved = await AsyncStorage.getItem(NOTIFICATIONS_KEY);
+      if (saved) {
+        setNotifications(JSON.parse(saved));
+      }
+    } catch (error) {
+      console.error('Error loading notification settings:', error);
+    }
+  };
+
+  const toggleNotification = async (key: keyof typeof notifications) => {
+    const newSettings = { ...notifications, [key]: !notifications[key] };
+    setNotifications(newSettings);
+    
+    // حفظ في AsyncStorage
+    try {
+      await AsyncStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(newSettings));
+    } catch (error) {
+      console.error('Error saving notification settings:', error);
+    }
   };
 
   const notificationSettings = [

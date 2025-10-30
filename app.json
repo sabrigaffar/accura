@@ -12,9 +12,15 @@
       "supportsTablet": true,
       "infoPlist": {
         "UIBackgroundModes": [
+          "remote-notification",
           "remote-notification"
-        ]
-      }
+        ],
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "نحتاج للوصول إلى موقعك لتتبع التوصيل بشكل مباشر وعرض الطلبات القريبة منك",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "نحتاج للوصول إلى موقعك بشكل مستمر لتتبع التوصيل أثناء عملك كسائق",
+        "NSLocationAlwaysUsageDescription": "نحتاج للوصول إلى موقعك بشكل مستمر لتتبع التوصيل أثناء عملك كسائق"
+      },
+      "bundleIdentifier": "com.accura.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +29,10 @@
       },
       "permissions": [
         "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE"
+        "VIBRATE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
       ],
       "package": "com.accura.app"
     },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,13 +11,20 @@ import {
   Linking,
   TextInput,
   Modal,
+  Dimensions,
+  Platform,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { Package, MapPin, Phone, Navigation, CheckCircle } from 'lucide-react-native';
-import { colors, spacing, typography, borderRadius, shadows } from '@/constants/theme';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
+import MapView, { Marker, Polyline, UrlTile, Region } from 'react-native-maps';
+import { Package, MapPin, Phone, Navigation, CheckCircle, MessageCircle } from 'lucide-react-native';
+import { spacing, typography, borderRadius, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
+import { formatCurrency, DEFAULT_CURRENCY } from '@/constants/currencies';
 
 interface ActiveOrder {
   id: string;
@@ -45,100 +52,451 @@ enum DeliveryStep {
 }
 
 export default function DriverActiveOrders() {
+  const params = useLocalSearchParams<{ orderId?: string }>();
+  const initialOrderId = typeof params.orderId === 'string' ? params.orderId : undefined;
   const { user } = useAuth();
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
+  const { theme } = useTheme();
+  const colors = theme;
+  const styles = React.useMemo(() => createStyles(colors), [colors]);
   const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const locationTrackingInterval = useRef<any>(null);
+  
+  const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [merchantLocation, setMerchantLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [customerLocation, setCustomerLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [showMap, setShowMap] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const trackingStartedRef = useRef(false);
+  const lastTrackedOrderIdRef = useRef<string | null>(null);
+  const convoAttemptedForOrderRef = useRef<Record<string, boolean>>({});
+  const fetchingActiveRef = React.useRef(false);
 
   useEffect(() => {
     fetchActiveOrder();
+    fetchCurrency();
   }, []);
+
+  // إعادة الجلب عند تركيز الشاشة
+  useFocusEffect(
+    useCallback(() => {
+      fetchActiveOrder();
+      return () => {
+        // إيقاف التتبع عند مغادرة الشاشة
+        stopLocationTracking();
+      };
+    }, [user?.id, initialOrderId])
+  );
+
+  const ensureConversation = async (orderId: string, customerId?: string, driverId?: string) => {
+    try {
+      // ابحث عن محادثة موجودة
+      const { data: existing, error: findErr } = await supabase
+        .from('chat_conversations')
+        .select('id')
+        .eq('order_id', orderId)
+        .maybeSingle();
+
+      if (findErr && findErr.code !== 'PGRST116') {
+        console.warn('find conversation error:', findErr);
+      }
+
+      if (existing?.id) {
+        setConversationId(existing.id);
+        return existing.id;
+      }
+
+      // أنشئ محادثة جديدة عبر RPC آمن (يستمد customer_id من orders)
+      const { data: rpcData, error: createErr } = await supabase
+        .rpc('create_chat_conversation', { p_order_id: orderId });
+
+      if (createErr) {
+        console.warn('create conversation error:', createErr);
+        return null;
+      }
+      if (rpcData && typeof rpcData === 'object' && 'id' in rpcData) {
+        const cid = (rpcData as any).id as string;
+        setConversationId(cid);
+        return cid;
+      }
+      return null;
+    } catch (e) {
+      console.error('ensureConversation error:', e);
+      return null;
+    }
+  };
+
+  const fetchCurrency = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('driver_profiles')
+        .select('preferred_currency')
+        .eq('id', user?.id)
+        .single();
+
+      if (error) throw error;
+      if (data?.preferred_currency) {
+        setCurrency(data.preferred_currency);
+      }
+    } catch (error) {
+      console.error('Error fetching currency:', error);
+    }
+  };
+
+  // بدء تتبع الموقع عندما يكون هناك طلب نشط (مرة واحدة لكل طلب)
+  useEffect(() => {
+    if (activeOrder) {
+      if (!trackingStartedRef.current || lastTrackedOrderIdRef.current !== activeOrder.id) {
+        startLocationTracking();
+        trackingStartedRef.current = true;
+        lastTrackedOrderIdRef.current = activeOrder.id;
+      }
+    }
+    // لا نوقف التتبع هنا على كل تغيير لتفادي التكرار؛ نوقفه فقط عند الخروج من الشاشة
+    return () => {
+      stopLocationTracking();
+      trackingStartedRef.current = false;
+      lastTrackedOrderIdRef.current = null;
+    };
+  }, [activeOrder?.id]);
+
+  const startLocationTracking = async () => {
+    try {
+      // طلب إذن الموقع (أثناء الاستخدام)
+      const perm = await Location.getForegroundPermissionsAsync();
+      if (perm.status !== Location.PermissionStatus.GRANTED) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== Location.PermissionStatus.GRANTED) {
+          Alert.alert(
+            'تتبع الموقع',
+            'تم رفض إذن الموقع. يرجى تفعيله من إعدادات الجهاز لتتبع التوصيل مباشرًة.',
+            [
+              { text: 'إلغاء', style: 'cancel' },
+              {
+                text: 'فتح الإعدادات',
+                onPress: () => {
+                  if (Platform.OS === 'ios') {
+                    Linking.openURL('app-settings:');
+                  } else {
+                    Linking.openSettings();
+                  }
+                },
+              },
+            ]
+          );
+          return;
+        }
+      }
+
+      // إيقاف أي تتبع سابق
+      stopLocationTracking();
+
+      // بدء تحديث الموقع كل 20 ثانية
+      const updateLocation = async () => {
+        try {
+          // على أندرويد: تفعيل مزود الشبكة قد يساعد في الأماكن الداخلية
+          if (Platform.OS === 'android' && (Location as any).enableNetworkProviderAsync) {
+            try { await (Location as any).enableNetworkProviderAsync(); } catch {}
+          }
+
+          const location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+            timeout: 10000,
+            mayShowUserSettingsDialog: true as any,
+          } as any);
+
+          // تحديث موقع السائق في الـ state
+          setDriverLocation({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          });
+
+          // حفظ الموقع في قاعدة البيانات
+          if (user?.id) {
+            await supabase
+              .from('driver_profiles')
+              .update({
+                current_lat: location.coords.latitude,
+                current_lng: location.coords.longitude,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', user.id);
+          }
+        } catch (error) {
+          console.warn('⚠️ Error updating driver location (primary); trying last known...', error);
+          try {
+            const last = await Location.getLastKnownPositionAsync();
+            if (last?.coords) {
+              setDriverLocation({ latitude: last.coords.latitude, longitude: last.coords.longitude });
+              if (user?.id) {
+                await supabase
+                  .from('driver_profiles')
+                  .update({
+                    current_lat: last.coords.latitude,
+                    current_lng: last.coords.longitude,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', user.id);
+              }
+              return;
+            }
+          } catch (fallbackErr) {
+            console.warn('⚠️ getLastKnownPositionAsync failed:', fallbackErr);
+          }
+          // لا يوجد موقع متاح
+          // لا نظهر Alert في كل مرة لتفادي الإزعاج، فقط نسجل الخطأ
+        }
+      };
+
+      // تحديث فوري
+      updateLocation();
+
+      // تحديث دوري كل 20 ثانية
+      locationTrackingInterval.current = setInterval(updateLocation, 20000);
+
+      console.log('✅ تم بدء تتبع الموقع للسائق');
+    } catch (error) {
+      console.error('Error starting location tracking:', error);
+    }
+  };
+
+  const stopLocationTracking = () => {
+    if (locationTrackingInterval.current) {
+      clearInterval(locationTrackingInterval.current);
+      locationTrackingInterval.current = null;
+      console.log('⏹️ تم إيقاف تتبع الموقع');
+    }
+  };
 
   const fetchActiveOrder = async () => {
     try {
+      if (fetchingActiveRef.current) return;
+      fetchingActiveRef.current = true;
       setLoading(true);
-
       if (!user) {
         setLoading(false);
         return;
       }
+      if (initialOrderId) {
+        // محاولة أولى: جلب الطلب مباشرة بالـ id المعطى
+        const { data: byIdData, error: byIdError } = await supabase
+          .from('orders')
+          .select(`
+            id,
+            customer_id,
+            order_number,
+            total,
+            delivery_fee,
+            status,
+            picked_up_at,
+            heading_to_merchant_at,
+            heading_to_customer_at,
+            customer_latitude,
+            customer_longitude,
+            merchant_id,
+            customer:profiles!orders_customer_id_fkey (
+              full_name,
+              phone_number
+            ),
+            merchant:merchants!orders_merchant_id_fkey (
+              name_ar,
+              address,
+              latitude,
+              longitude
+            )
+          `)
+          .eq('id', initialOrderId)
+          .eq('driver_id', user.id)
+          .limit(1);
+        if (!byIdError && byIdData && byIdData.length > 0) {
+          const o = byIdData[0];
+          const customer = Array.isArray(o.customer) ? o.customer[0] : o.customer;
+          const merchant = Array.isArray(o.merchant) ? o.merchant[0] : o.merchant;
+          const customerLat = o.customer_latitude;
+          const customerLng = o.customer_longitude;
 
-      // جلب الطلب النشط للسائق الحالي
+          const active: ActiveOrder = {
+            id: o.id,
+            order_number: o.order_number,
+            customer_name: customer?.full_name || 'عميل',
+            customer_phone: customer?.phone_number || '',
+            merchant_name: merchant?.name_ar || 'متجر',
+            merchant_address: merchant?.address || 'غير محدد',
+            delivery_address: customerLat && customerLng
+              ? `موقع محدد: ${Number(customerLat).toFixed(4)}, ${Number(customerLng).toFixed(4)}`
+              : 'غير محدد',
+            total: o.total,
+            delivery_fee: o.delivery_fee,
+            status: o.status,
+            items_count: 0,
+            picked_up_at: o.picked_up_at || undefined,
+            heading_to_merchant_at: o.heading_to_merchant_at || undefined,
+            heading_to_customer_at: o.heading_to_customer_at || undefined,
+          };
+          setActiveOrder(active);
+
+          // تأكد من وجود محادثة بين السائق والعميل لهذا الطلب (محاولة مرة واحدة لكل طلب)
+          if (o.customer_id && o.id && !convoAttemptedForOrderRef.current[o.id]) {
+            convoAttemptedForOrderRef.current[o.id] = true;
+            try {
+              await ensureConversation(o.id, o.customer_id, user.id);
+            } catch (e) {
+              console.warn('ensureConversation attempt failed (will not retry immediately)');
+            }
+          }
+
+          if (merchant?.latitude && merchant?.longitude) {
+            setMerchantLocation({ latitude: parseFloat(merchant.latitude), longitude: parseFloat(merchant.longitude) });
+          }
+          if (customerLat && customerLng) {
+            setCustomerLocation({ latitude: parseFloat(String(customerLat)), longitude: parseFloat(String(customerLng)) });
+          }
+
+          return; // نجح الجلب بالمعرف
+        }
+      }
+
       const { data: orderData, error: orderError } = await supabase
         .from('orders')
         .select(`
           id,
           order_number,
           total,
+          product_total,
           delivery_fee,
+          service_fee,
+          tax_amount,
+          customer_total,
+          payment_method,
           status,
           picked_up_at,
           heading_to_merchant_at,
           heading_to_customer_at,
-          delivery_address:addresses!orders_delivery_address_id_fkey (
-            street_address,
-            city,
-            district
-          ),
+          customer_latitude,
+          customer_longitude,
           customer:profiles!orders_customer_id_fkey (
+            id,
             full_name,
             phone_number
           ),
           merchant:merchants!orders_merchant_id_fkey (
             name_ar,
-            address
+            address,
+            latitude,
+            longitude
           )
         `)
         .eq('driver_id', user.id)
-        .eq('status', 'out_for_delivery')
-        .single();
+        .in('status', ['on_the_way', 'picked_up', 'heading_to_customer', 'heading_to_merchant'])
+        .order('updated_at', { ascending: false });
 
-      if (orderError) {
-        if (orderError.code === 'PGRST116') {
-          // No active order found
-          setActiveOrder(null);
-        } else {
-          throw orderError;
+      if (orderError || !orderData || orderData.length === 0) {
+        if (orderError) console.error('❌ [Active Orders] Error:', orderError);
+
+        // استعلام احتياطي بدون أي تضمينات لتجنب تأثير RLS على الجداول المرتبطة
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('orders')
+          .select('id, order_number, total, product_total, delivery_fee, service_fee, tax_amount, customer_total, payment_method, status, picked_up_at, heading_to_merchant_at, heading_to_customer_at, customer_latitude, customer_longitude, merchant_id')
+          .eq('driver_id', user.id)
+          .eq('status', 'out_for_delivery')
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        if (!fallbackError && fallbackData && fallbackData.length > 0) {
+          const base = fallbackData[0];
+          // جلب بيانات التاجر بشكل منفصل
+          const { data: merchantData } = await supabase
+            .from('merchants')
+            .select('name_ar, address, latitude, longitude')
+            .eq('id', base.merchant_id)
+            .limit(1);
+
+          const merchant = merchantData && merchantData.length > 0 ? merchantData[0] : null;
+
+          setActiveOrder({
+            id: base.id,
+            order_number: base.order_number,
+            customer_name: 'عميل',
+            customer_phone: '',
+            merchant_name: merchant?.name_ar || 'متجر',
+            merchant_address: merchant?.address || 'غير محدد',
+            delivery_address:
+              base.customer_latitude && base.customer_longitude
+                ? `موقع محدد: ${Number(base.customer_latitude).toFixed(4)}, ${Number(base.customer_longitude).toFixed(4)}`
+                : 'غير محدد',
+            total: base.total,
+            delivery_fee: base.delivery_fee || 0,
+            status: base.status,
+            items_count: 0,
+            picked_up_at: base.picked_up_at,
+            heading_to_merchant_at: base.heading_to_merchant_at,
+            heading_to_customer_at: base.heading_to_customer_at,
+          });
+          return;
         }
-      } else if (orderData) {
+
+        // لا يوجد طلب نشط حتى بعد الاستعلام الاحتياطي
+        setActiveOrder(null);
+      } else if (orderData && orderData.length > 0) {
+        const firstOrder = orderData[0];
+        console.log('✅ [Active Orders] Found active order:', firstOrder.order_number);
         // جلب عدد الأصناف
         const { count } = await supabase
           .from('order_items')
           .select('*', { count: 'exact', head: true })
-          .eq('order_id', orderData.id);
+          .eq('order_id', firstOrder.id);
 
-        const customer = Array.isArray(orderData.customer) ? orderData.customer[0] : orderData.customer;
-        const merchant = Array.isArray(orderData.merchant) ? orderData.merchant[0] : orderData.merchant;
-        const address = Array.isArray(orderData.delivery_address) ? orderData.delivery_address[0] : orderData.delivery_address;
+        const customer = Array.isArray(firstOrder.customer) ? firstOrder.customer[0] : firstOrder.customer;
+        const merchant = Array.isArray(firstOrder.merchant) ? firstOrder.merchant[0] : firstOrder.merchant;
+
+        // ✅ استخدام موقع العميل التلقائي
+        const customerLat = firstOrder.customer_latitude;
+        const customerLng = firstOrder.customer_longitude;
 
         setActiveOrder({
-          id: orderData.id,
-          order_number: orderData.order_number,
+          id: firstOrder.id,
+          order_number: firstOrder.order_number,
           customer_name: customer?.full_name || 'عميل',
           customer_phone: customer?.phone_number || '',
           merchant_name: merchant?.name_ar || 'متجر',
           merchant_address: merchant?.address || 'غير محدد',
-          delivery_address: address
-            ? `${address.street_address}, ${address.district || ''}, ${address.city}`
+          delivery_address: customerLat && customerLng
+            ? `موقع محدد: ${customerLat.toFixed(4)}, ${customerLng.toFixed(4)}`
             : 'غير محدد',
-          total: orderData.total,
-          delivery_fee: orderData.delivery_fee || 0,
-          status: orderData.status,
+          total: firstOrder.total,
+          delivery_fee: firstOrder.delivery_fee || 0,
+          status: firstOrder.status,
           items_count: count || 0,
-          picked_up_at: orderData.picked_up_at,
-          heading_to_merchant_at: orderData.heading_to_merchant_at,
-          heading_to_customer_at: orderData.heading_to_customer_at,
+          picked_up_at: firstOrder.picked_up_at,
+          heading_to_merchant_at: firstOrder.heading_to_merchant_at,
+          heading_to_customer_at: firstOrder.heading_to_customer_at,
         });
+
+        // تحديث مواقع التاجر والعميل للخريطة
+        if (merchant?.latitude && merchant?.longitude) {
+          setMerchantLocation({
+            latitude: parseFloat(merchant.latitude),
+            longitude: parseFloat(merchant.longitude),
+          });
+        }
+        if (customerLat && customerLng) {
+          setCustomerLocation({
+            latitude: parseFloat(customerLat),
+            longitude: parseFloat(customerLng),
+          });
+        }
       }
     } catch (error) {
       console.error('Error fetching active order:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء تحميل الطلب النشط');
+      Alert.alert('❌ خطأ', 'لم نتمكن من تحميل الطلب. تحقق من الاتصال بالإنترنت.', [{ text: 'حسناً' }]);
     } finally {
       setLoading(false);
       setRefreshing(false);
+      fetchingActiveRef.current = false;
     }
   };
 
@@ -169,12 +527,11 @@ export default function DriverActiveOrders() {
         .eq('id', activeOrder.id);
 
       if (error) throw error;
-
-      Alert.alert('تم', 'تم تحديث حالة الطلب');
+      Alert.alert('✅ تم التحديث', 'أنت الآن في الطريق إلى المتجر', [{ text: 'حسناً' }]);
       fetchActiveOrder();
     } catch (error) {
       console.error('Error updating order:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء تحديث الحالة');
+      Alert.alert('❌ خطأ', 'لم يتم تحديث الحالة. حاول مرة أخرى.', [{ text: 'حسناً' }]);
     } finally {
       setCompleting(false);
     }
@@ -184,12 +541,12 @@ export default function DriverActiveOrders() {
     if (!activeOrder) return;
 
     Alert.alert(
-      'تأكيد الاستلام',
-      'هل تم استلام الطلب من المتجر؟',
+      '📦 تأكيد الاستلام',
+      'هل استلمت الطلب من المتجر؟',
       [
-        { text: 'لا', style: 'cancel' },
+        { text: 'ليس بعد', style: 'cancel' },
         {
-          text: 'نعم',
+          text: '✓ نعم، استلمت الطلب',
           onPress: async () => {
             try {
               setCompleting(true);
@@ -197,6 +554,7 @@ export default function DriverActiveOrders() {
                 .from('orders')
                 .update({
                   picked_up_at: new Date().toISOString(),
+                  status: 'picked_up',
                   updated_at: new Date().toISOString(),
                 })
                 .eq('id', activeOrder.id);
@@ -207,7 +565,7 @@ export default function DriverActiveOrders() {
               fetchActiveOrder();
             } catch (error) {
               console.error('Error updating order:', error);
-              Alert.alert('خطأ', 'حدث خطأ أثناء تحديث الحالة');
+              Alert.alert('❌ خطأ', 'لم يتم تأكيد الاستلام. حاول مرة أخرى.', [{ text: 'حسناً' }]);
             } finally {
               setCompleting(false);
             }
@@ -226,6 +584,7 @@ export default function DriverActiveOrders() {
         .from('orders')
         .update({
           heading_to_customer_at: new Date().toISOString(),
+          status: 'on_the_way',
           updated_at: new Date().toISOString(),
         })
         .eq('id', activeOrder.id);
@@ -310,55 +669,53 @@ export default function DriverActiveOrders() {
     if (!activeOrder) return;
 
     Alert.alert(
-      'تأكيد التوصيل',
-      'هل تم تسليم الطلب للعميل؟',
+      '🎉 تأكيد التوصيل',
+      'هل سلّمت الطلب للعميل؟\nسيتم تسوية أرباحك وخصم رسوم المنصة (1 جنيه لكل كم) وإذا كان الدفع نقداً سيتم خصم 2.5 إضافية.',
       [
-        { text: 'لا', style: 'cancel' },
+        { text: 'ليس بعد', style: 'cancel' },
         {
-          text: 'نعم، تم التسليم',
+          text: '✓ نعم، تم التسليم',
           onPress: async () => {
             try {
               setCompleting(true);
-
-              // تحديث حالة الطلب إلى delivered
-              const { error: updateError } = await supabase
-                .from('orders')
-                .update({
-                  status: 'delivered',
-                  delivered_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', activeOrder.id);
-
-              if (updateError) throw updateError;
-
-              // إضافة الأرباح لجدول driver_earnings
-              const { error: earningsError } = await supabase
-                .from('driver_earnings')
-                .insert({
-                  driver_id: user?.id,
-                  order_id: activeOrder.id,
-                  amount: activeOrder.delivery_fee,
-                  earned_at: new Date().toISOString(),
-                });
-
-              if (earningsError) {
-                console.error('Error adding earnings:', earningsError);
-                // لا نوقف العملية إذا فشل تسجيل الأرباح
+              // إنهاء التسليم مع التسوية المحاسبية عبر RPC
+              const { data: fx, error: fxErr } = await supabase
+                .rpc('finalize_delivery_tx', { p_order_id: activeOrder.id });
+              if (fxErr) {
+                console.error('❌ finalize_delivery_tx error', fxErr);
+                throw fxErr;
+              }
+              const ok = fx?.[0]?.ok;
+              const msg = fx?.[0]?.message || 'تم إنهاء التسليم وتسوية الرسوم';
+              if (!ok) {
+                Alert.alert('تنبيه', msg);
+                return;
               }
 
-              Alert.alert('تم التوصيل', 'تم تسجيل التوصيل بنجاح وإضافة الأرباح', [
+              // حفظ معلومات الطلب قبل مسحها
+              const completedOrderInfo = {
+                orderId: activeOrder.id,
+                orderNumber: activeOrder.order_number,
+                customerName: activeOrder.customer_name,
+                merchantName: activeOrder.merchant_name,
+              };
+
+              Alert.alert('🎉 تم التوصيل بنجاح!', `تم تسليم الطلب ${completedOrderInfo.orderNumber} بنجاح\nتم إضافة ${activeOrder.delivery_fee} ${currency} كأرباح التوصيل\nوتم خصم رسوم المنصة حسب السياسة.`, [
                 {
-                  text: 'موافق',
+                  text: '💰 عرض أرباحي',
                   onPress: () => {
-                    setActiveOrder(null);
+                    setActiveOrder(null); // إزالة الطلب من النشطة لمنع تكرار التأكيد
                     router.push('/(driver-tabs)/earnings');
                   },
                 },
               ]);
+              // حتى لو لم يضغط المستخدم على زر الأرباح، نظف الحالة محلياً
+              setActiveOrder(null);
+              // إعادة تحميل الطلبات النشطة للتأكد من الإخفاء
+              fetchActiveOrder();
             } catch (error) {
               console.error('Error completing delivery:', error);
-              Alert.alert('خطأ', 'حدث خطأ أثناء تسجيل التوصيل');
+              Alert.alert('❌ خطأ', 'لم يتم تسجيل التوصيل. حاول مرة أخرى.', [{ text: 'حسناً' }]);
             } finally {
               setCompleting(false);
             }
@@ -396,28 +753,55 @@ export default function DriverActiveOrders() {
   };
 
   const handleNavigate = () => {
-    if (!activeOrder?.delivery_address) {
-      Alert.alert('خطأ', 'عنوان التوصيل غير متوفر');
+    // نستخدم الإحداثيات الدقيقة لمسار ملاحة صحيح
+    // الوجهة: إلى المتجر قبل الاستلام، وإلى العميل بعد الاستلام
+    const step = getCurrentStep();
+    const destination = (step <= DeliveryStep.PICKED_UP ? merchantLocation : customerLocation);
+    const origin = driverLocation; // يفضّل استخدام موقع السائق الحالي
+
+    if (!destination?.latitude || !destination?.longitude) {
+      Alert.alert('تنبيه', 'إحداثيات الوجهة غير متوفرة بعد. افتح الخريطة الداخلية أولاً للتحديث أو انتظر ثوانٍ.');
       return;
     }
 
-    // فتح خرائط جوجل مع عنوان التوصيل
-    // يمكن تحسينه لاحقاً باستخدام الإحداثيات
-    const address = encodeURIComponent(activeOrder.delivery_address);
-    const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${address}`;
-    
-    Linking.canOpenURL(googleMapsUrl)
-      .then((supported) => {
-        if (supported) {
-          return Linking.openURL(googleMapsUrl);
-        } else {
-          Alert.alert('خطأ', 'لا يمكن فتح الخرائط على هذا الجهاز');
+    const destParam = `${destination.latitude},${destination.longitude}`;
+    const originParam = origin?.latitude && origin?.longitude ? `${origin.latitude},${origin.longitude}` : undefined;
+
+    // iOS: Apple Maps أولاً، ثم Google Maps كبديل
+    const appleUrl = originParam
+      ? `http://maps.apple.com/?saddr=${encodeURIComponent(originParam)}&daddr=${encodeURIComponent(destParam)}&dirflg=d`
+      : `http://maps.apple.com/?daddr=${encodeURIComponent(destParam)}&dirflg=d`;
+
+    const googleUrl = originParam
+      ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(originParam)}&destination=${encodeURIComponent(destParam)}&travelmode=driving`
+      : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destParam)}&travelmode=driving`;
+
+    const tryOpen = async () => {
+      try {
+        // جرّب Apple Maps على iOS أولاً
+        if (Platform.OS === 'ios') {
+          const canApple = await Linking.canOpenURL(appleUrl);
+          if (canApple) {
+            await Linking.openURL(appleUrl);
+            return;
+          }
         }
-      })
-      .catch((err) => {
+        // جرّب Google Maps URL (يعمل على أندرويد وiOS إذا متوفر)
+        const canGoogle = await Linking.canOpenURL(googleUrl);
+        if (canGoogle) {
+          await Linking.openURL(googleUrl);
+          return;
+        }
+        // fallback: افتح نتيجة بحث بسيطة
+        const fallback = `https://maps.google.com/?q=${encodeURIComponent(destParam)}`;
+        await Linking.openURL(fallback);
+      } catch (err) {
         console.error('Error opening maps:', err);
-        Alert.alert('خطأ', 'حدث خطأ أثناء فتح الخرائط');
-      });
+        Alert.alert('خطأ', 'حدث خطأ أثناء فتح تطبيق الخرائط');
+      }
+    };
+
+    tryOpen();
   };
 
   if (loading) {
@@ -547,7 +931,7 @@ export default function DriverActiveOrders() {
               <Text style={styles.orderNumber}>#{activeOrder.order_number}</Text>
             </View>
             <View style={styles.deliveryFeeBadge}>
-              <Text style={styles.deliveryFeeText}>أجرة التوصيل: {activeOrder.delivery_fee.toFixed(2)} ر.س</Text>
+              <Text style={styles.deliveryFeeText}>أجرة التوصيل: {formatCurrency(activeOrder.delivery_fee, currency)}</Text>
             </View>
           </View>
 
@@ -569,12 +953,23 @@ export default function DriverActiveOrders() {
             <View style={styles.infoCard}>
               <View style={styles.customerHeader}>
                 <Text style={styles.customerName}>{activeOrder.customer_name}</Text>
-                {activeOrder.customer_phone && (
-                  <TouchableOpacity style={styles.callButton} onPress={handleCallCustomer}>
-                    <Phone size={18} color={colors.white} />
-                    <Text style={styles.callButtonText}>اتصال</Text>
-                  </TouchableOpacity>
-                )}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {conversationId && (
+                    <TouchableOpacity
+                      style={[styles.callButton, { backgroundColor: colors.primary }]}
+                      onPress={() => router.push({ pathname: `/chat/${conversationId}`, params: { driverPhone: activeOrder.customer_phone } } as any)}
+                    >
+                      <MessageCircle size={18} color={colors.white} />
+                      <Text style={styles.callButtonText}>دردشة</Text>
+                    </TouchableOpacity>
+                  )}
+                  {activeOrder.customer_phone && (
+                    <TouchableOpacity style={styles.callButton} onPress={handleCallCustomer}>
+                      <Phone size={18} color={colors.white} />
+                      <Text style={styles.callButtonText}>اتصال</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
               <View style={styles.addressRow}>
                 <MapPin size={16} color={colors.textLight} />
@@ -591,7 +986,7 @@ export default function DriverActiveOrders() {
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>إجمالي الطلب:</Text>
-              <Text style={styles.detailValue}>{activeOrder.total.toFixed(2)} ر.س</Text>
+              <Text style={styles.detailValue}>{formatCurrency(activeOrder.total, currency)}</Text>
             </View>
           </View>
 
@@ -627,6 +1022,93 @@ export default function DriverActiveOrders() {
               </TouchableOpacity>
             )}
           </View>
+
+          {/* Map View */}
+          {showMap && driverLocation && (merchantLocation || customerLocation) && (
+            <View style={styles.mapContainer}>
+              <MapView
+                style={styles.map}
+                initialRegion={{
+                  latitude: driverLocation.latitude,
+                  longitude: driverLocation.longitude,
+                  latitudeDelta: 0.05,
+                  longitudeDelta: 0.05,
+                }}
+              >
+                {/* Thunderforest Cycle Map Tiles */}
+                <UrlTile
+                  urlTemplate="https://tile.thunderforest.com/cycle/{z}/{x}/{y}.png?apikey=5fa1378c665246bf84d40a5909a01c7f"
+                  maximumZ={19}
+                  flipY={false}
+                />
+
+                {/* Driver Marker */}
+                <Marker
+                  coordinate={driverLocation}
+                  title="موقعي"
+                  description="موقع السائق"
+                >
+                  <View style={[styles.markerDot, { backgroundColor: colors.success }]} />
+                </Marker>
+
+                {/* Merchant Marker (if not picked up yet) */}
+                {merchantLocation && getCurrentStep() <= DeliveryStep.PICKED_UP && (
+                  <Marker
+                    coordinate={merchantLocation}
+                    title="المتجر"
+                    description={activeOrder.merchant_name}
+                    pinColor="orange"
+                  />
+                )}
+
+                {/* Customer Marker */}
+                {customerLocation && (
+                  <Marker
+                    coordinate={customerLocation}
+                    title="العميل"
+                    description={activeOrder.customer_name}
+                    pinColor="red"
+                  />
+                )}
+
+                {/* Route Polyline */}
+                {getCurrentStep() <= DeliveryStep.PICKED_UP && merchantLocation ? (
+                  // مسار إلى المتجر
+                  <Polyline
+                    coordinates={[driverLocation, merchantLocation]}
+                    strokeColor={colors.primary}
+                    strokeWidth={4}
+                  />
+                ) : customerLocation ? (
+                  // مسار إلى العميل
+                  <Polyline
+                    coordinates={[driverLocation, customerLocation]}
+                    strokeColor={colors.success}
+                    strokeWidth={4}
+                  />
+                ) : null}
+              </MapView>
+
+              {/* Map Toggle Button */}
+              <TouchableOpacity
+                style={styles.mapToggleButton}
+                onPress={() => setShowMap(false)}
+              >
+                <Text style={styles.mapToggleText}>إخفاء الخريطة</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Show Map Button */}
+          {!showMap && (driverLocation && (merchantLocation || customerLocation)) && (
+            <TouchableOpacity
+              style={styles.showMapButton}
+              onPress={() => setShowMap(true)}
+            >
+              <MapPin size={20} color={colors.primary} />
+              <Text style={styles.showMapButtonText}>عرض الخريطة والمسار</Text>
+            </TouchableOpacity>
+          )}
 
           {/* Cancel Order Button */}
           <TouchableOpacity
@@ -720,7 +1202,7 @@ export default function DriverActiveOrders() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -1087,5 +1569,56 @@ const styles = StyleSheet.create({
   modalConfirmButtonText: {
     ...typography.bodyMedium,
     color: colors.white,
+  },
+  // Map styles
+  mapContainer: {
+    height: 300,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    marginBottom: spacing.lg,
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+  markerDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 3,
+    borderColor: colors.white,
+  },
+  mapToggleButton: {
+    position: 'absolute',
+    top: spacing.md,
+    right: spacing.md,
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    ...shadows.small,
+  },
+  mapToggleText: {
+    ...typography.caption,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  showMapButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    borderStyle: 'dashed',
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.md,
+  },
+  showMapButtonText: {
+    ...typography.bodyMedium,
+    color: colors.primary,
+    fontWeight: '600',
   },
 });

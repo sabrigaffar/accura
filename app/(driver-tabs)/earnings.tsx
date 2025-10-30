@@ -10,10 +10,13 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { TrendingUp, DollarSign, Package, Calendar } from 'lucide-react-native';
-import { colors, spacing, typography, borderRadius, shadows } from '@/constants/theme';
+import { spacing, typography, borderRadius, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
+import { formatCurrency, DEFAULT_CURRENCY, getCurrencyByCode } from '@/constants/currencies';
 
 interface Earning {
   id: string;
@@ -33,6 +36,11 @@ interface EarningsStats {
 
 export default function DriverEarnings() {
   const { user } = useAuth();
+  const { theme } = useTheme();
+  const colors = theme; // Make colors dynamic based on theme
+  
+  // Create styles with dynamic theme colors
+  const styles = React.useMemo(() => createStyles(colors), [colors]);
   const [earnings, setEarnings] = useState<Earning[]>([]);
   const [stats, setStats] = useState<EarningsStats>({
     today: 0,
@@ -44,10 +52,36 @@ export default function DriverEarnings() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState<'today' | 'week' | 'month' | 'all'>('today');
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
 
   useEffect(() => {
     fetchEarnings();
+    fetchCurrency();
   }, []);
+
+  // تحديث العملة والأرباح عند العودة للصفحة
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchCurrency();
+      fetchEarnings();
+    }, [])
+  );
+
+  const fetchCurrency = async () => {
+    if (!user?.id) return;
+    try {
+      const { data } = await supabase
+        .from('driver_profiles')
+        .select('preferred_currency')
+        .eq('id', user.id)
+        .single();
+      if (data?.preferred_currency) {
+        setCurrency(data.preferred_currency);
+      }
+    } catch (e) {
+      console.error('fetch currency error:', e);
+    }
+  };
 
   const fetchEarnings = async () => {
     try {
@@ -147,31 +181,31 @@ export default function DriverEarnings() {
   };
 
   const getLast7DaysEarnings = () => {
-    const result = [];
-    const today = new Date();
-    
+    const result: { day: string; amount: number; date: Date }[] = [];
+    const now = new Date();
+    const dayNames = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
+
+    // إنشاء مصفوفة لآخر 7 أيام
     for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
+      const date = new Date(now);
       date.setDate(date.getDate() - i);
       date.setHours(0, 0, 0, 0);
       
-      const nextDate = new Date(date);
-      nextDate.setDate(nextDate.getDate() + 1);
-      
       const dayEarnings = earnings.filter((e) => {
-        const earnedDate = new Date(e.earned_at);
-        return earnedDate >= date && earnedDate < nextDate;
+        const earnDate = new Date(e.earned_at);
+        earnDate.setHours(0, 0, 0, 0);
+        return earnDate.getTime() === date.getTime();
       });
-      
-      const totalEarnings = dayEarnings.reduce((sum, e) => sum + e.amount, 0);
+
+      const totalAmount = dayEarnings.reduce((sum, e) => sum + e.amount, 0);
       
       result.push({
-        date: date.toISOString(),
-        dayName: date.toLocaleDateString('ar-SA', { weekday: 'short' }),
-        earnings: totalEarnings,
+        day: i === 0 ? 'اليوم' : dayNames[date.getDay()],
+        amount: totalAmount,
+        date: date,
       });
     }
-    
+
     return result;
   };
 
@@ -194,7 +228,7 @@ export default function DriverEarnings() {
         </View>
         <View style={styles.amountBadge}>
           <DollarSign size={16} color={colors.success} />
-          <Text style={styles.amountText}>{item.amount.toFixed(2)} ر.س</Text>
+          <Text style={styles.amountText}>{formatCurrency(item.amount, currency)}</Text>
         </View>
       </View>
       <Text style={styles.customerName}>{item.customer_name}</Text>
@@ -240,9 +274,10 @@ export default function DriverEarnings() {
         <View style={styles.chartContainer}>
           <Text style={styles.chartTitle}>أرباح آخر 7 أيام</Text>
           <View style={styles.chart}>
-            {getLast7DaysEarnings().map((day, index) => {
-              const maxEarning = Math.max(...getLast7DaysEarnings().map(d => d.earnings), 1);
-              const heightPercent = (day.earnings / maxEarning) * 100;
+            {getLast7DaysEarnings().map((dayData, index) => {
+              const chartData = getLast7DaysEarnings();
+              const maxEarning = Math.max(...chartData.map(d => d.amount), 1);
+              const heightPercent = (dayData.amount / maxEarning) * 100;
               
               return (
                 <View key={index} style={styles.chartBarContainer}>
@@ -253,14 +288,14 @@ export default function DriverEarnings() {
                         { height: `${Math.max(heightPercent, 5)}%` },
                       ]}
                     >
-                      {day.earnings > 0 && (
+                      {dayData.amount > 0 && (
                         <Text style={styles.chartBarValue}>
-                          {day.earnings.toFixed(0)}
+                          {dayData.amount.toFixed(0)}
                         </Text>
                       )}
                     </View>
                   </View>
-                  <Text style={styles.chartBarLabel}>{day.dayName}</Text>
+                  <Text style={styles.chartBarLabel}>{dayData.day}</Text>
                 </View>
               );
             })}
@@ -273,25 +308,25 @@ export default function DriverEarnings() {
             <View style={styles.statCard}>
               <Text style={styles.statLabel}>اليوم</Text>
               <Text style={styles.statValue}>{stats.today.toFixed(2)}</Text>
-              <Text style={styles.statUnit}>ر.س</Text>
+              <Text style={styles.statUnit}>{getCurrencyByCode(currency).symbol}</Text>
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statLabel}>هذا الأسبوع</Text>
               <Text style={styles.statValue}>{stats.week.toFixed(2)}</Text>
-              <Text style={styles.statUnit}>ر.س</Text>
+              <Text style={styles.statUnit}>{getCurrencyByCode(currency).symbol}</Text>
             </View>
           </View>
           <View style={styles.statsGrid}>
             <View style={styles.statCard}>
               <Text style={styles.statLabel}>هذا الشهر</Text>
               <Text style={styles.statValue}>{stats.month.toFixed(2)}</Text>
-              <Text style={styles.statUnit}>ر.س</Text>
+              <Text style={styles.statUnit}>{getCurrencyByCode(currency).symbol}</Text>
             </View>
             <View style={[styles.statCard, styles.totalCard]}>
               <TrendingUp size={20} color={colors.primary} />
               <Text style={styles.statLabel}>الإجمالي</Text>
               <Text style={[styles.statValue, styles.totalValue]}>{stats.total.toFixed(2)}</Text>
-              <Text style={styles.statUnit}>ر.س</Text>
+              <Text style={styles.statUnit}>{getCurrencyByCode(currency).symbol}</Text>
             </View>
           </View>
         </View>
@@ -389,7 +424,7 @@ export default function DriverEarnings() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,

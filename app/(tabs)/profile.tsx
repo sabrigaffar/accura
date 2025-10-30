@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Alert,
   Modal,
   TextInput,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -24,20 +25,26 @@ import {
   Phone,
   Languages,
   Star,
+  Key,
+  Moon,
 } from 'lucide-react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { getCachedUserRating } from '@/lib/ratingUtils';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function ProfileScreen() {
   const { profile, signOut, refreshProfile } = useAuth();
+  const { theme, isDark, toggleTheme } = useTheme();
   const [editingProfile, setEditingProfile] = useState(false);
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [phoneNumber, setPhoneNumber] = useState(profile?.phone_number || '');
   const [averageRating, setAverageRating] = useState(0);
   const [totalReviews, setTotalReviews] = useState(0);
+
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   useEffect(() => {
     if (profile) {
@@ -122,9 +129,20 @@ export default function ProfileScreen() {
       onPress: () => router.push('/profile/payment-methods'),
     },
     {
+      icon: Key,
+      label: 'تغيير كلمة المرور',
+      onPress: () => router.push('/settings/change-password' as any),
+    },
+    {
       icon: Bell,
       label: 'الإشعارات',
       onPress: () => router.push('/profile/customer-notifications' as any),
+    },
+    {
+      icon: Moon,
+      label: 'الوضع الليلي',
+      onPress: () => {},
+      isToggle: true,
     },
     {
       icon: Settings,
@@ -165,17 +183,17 @@ export default function ProfileScreen() {
         <View style={styles.profileCard}>
           <TouchableOpacity style={styles.avatarContainer} onPress={() => {}}>
             <View style={styles.avatar}>
-              <User size={32} color={colors.white} />
+              <User size={40} color="#FFFFFF" />
             </View>
             <View style={styles.cameraIcon}>
-              <Camera size={16} color={colors.white} />
+              <Camera size={14} color="#FFFFFF" />
             </View>
           </TouchableOpacity>
           
           <View style={styles.profileInfo}>
             <Text style={styles.userName}>{profile?.full_name || 'مستخدم'}</Text>
             <View style={styles.phoneContainer}>
-              <Phone size={16} color={colors.textLight} />
+              <Phone size={14} color={theme.textLight} />
               <Text style={styles.userPhone}>{profile?.phone_number || ''}</Text>
             </View>
             
@@ -183,12 +201,12 @@ export default function ProfileScreen() {
             {(profile?.user_type === 'driver' || profile?.user_type === 'merchant') && (
               <View style={styles.ratingContainer}>
                 <View style={styles.starsContainer}>
-                  {[1, 2, 3, 4, 5].map((star) => (
+                  {[1, 2, 3, 4, 5].map((star, i) => (
                     <Star
-                      key={star}
+                      key={i}
                       size={16}
-                      color={star <= Math.round(averageRating) ? colors.warning : colors.border}
-                      fill={star <= Math.round(averageRating) ? colors.warning : 'transparent'}
+                      fill={i < Math.floor(averageRating) ? theme.warning : 'none'}
+                      color={theme.warning}
                     />
                   ))}
                 </View>
@@ -212,7 +230,7 @@ export default function ProfileScreen() {
             style={styles.editButton}
             onPress={() => setEditingProfile(true)}
           >
-            <Edit3 size={16} color={colors.primary} />
+            <Edit3 size={16} color={theme.primary} />
             <Text style={styles.editButtonText}>تعديل</Text>
           </TouchableOpacity>
         </View>
@@ -228,11 +246,11 @@ export default function ProfileScreen() {
                 onPress={item.onPress}
               >
                 <View style={styles.menuItemRight}>
-                  <ChevronLeft size={20} color={colors.textLight} />
+                  <ChevronLeft size={20} color={theme.textLight} />
                   <Text style={styles.menuLabel}>{item.label}</Text>
                 </View>
                 <View style={styles.menuIcon}>
-                  <Icon size={20} color={colors.primary} />
+                  <Icon size={20} color={theme.primary} />
                 </View>
               </TouchableOpacity>
             );
@@ -245,25 +263,39 @@ export default function ProfileScreen() {
           {menuItems.map((item, index) => {
             const Icon = item.icon;
             return (
-              <TouchableOpacity
-                key={index}
-                style={styles.menuItem}
-                onPress={item.onPress}
-              >
-                <View style={styles.menuItemRight}>
-                  <ChevronLeft size={20} color={colors.textLight} />
-                  <Text style={styles.menuLabel}>{item.label}</Text>
-                </View>
-                <View style={styles.menuIcon}>
-                  <Icon size={20} color={colors.primary} />
-                </View>
-              </TouchableOpacity>
+              <View key={index}>
+                {(item as any).isToggle ? (
+                  <View style={styles.menuItem}>
+                    <View style={styles.menuItemRight}>
+                      <item.icon size={22} color={theme.textLight} style={styles.menuIcon} />
+                      <Text style={styles.menuLabel}>{item.label}</Text>
+                    </View>
+                    <Switch
+                      value={isDark}
+                      onValueChange={toggleTheme}
+                      trackColor={{ false: theme.border, true: theme.primary }}
+                      thumbColor="#FFFFFF"
+                    />
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={item.onPress}
+                  >
+                    <View style={styles.menuItemRight}>
+                      <item.icon size={22} color={theme.textLight} style={styles.menuIcon} />
+                      <Text style={styles.menuLabel}>{item.label}</Text>
+                    </View>
+                    <ChevronLeft size={20} color={theme.textLight} />
+                  </TouchableOpacity>
+                )}
+              </View>
             );
           })}
         </View>
 
         <TouchableOpacity style={styles.logoutButton} onPress={handleSignOut}>
-          <LogOut size={20} color={colors.error} />
+          <LogOut size={22} color={theme.error} />
           <Text style={styles.logoutText}>تسجيل الخروج</Text>
         </TouchableOpacity>
 
@@ -315,28 +347,28 @@ export default function ProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   headerTitle: {
     ...typography.h2,
-    color: colors.text,
+    color: theme.text,
     textAlign: 'center',
   },
   content: {
     flex: 1,
   },
   profileCard: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     alignItems: 'center',
     paddingVertical: spacing.xl,
     marginBottom: spacing.md,
@@ -349,7 +381,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -357,7 +389,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     right: 0,
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     borderRadius: 12,
     width: 24,
     height: 24,
@@ -370,7 +402,7 @@ const styles = StyleSheet.create({
   },
   userName: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.xs,
   },
   phoneContainer: {
@@ -380,7 +412,7 @@ const styles = StyleSheet.create({
   },
   userPhone: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     marginRight: spacing.xs,
   },
   ratingContainer: {
@@ -394,33 +426,33 @@ const styles = StyleSheet.create({
   },
   ratingText: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   userType: {
     ...typography.caption,
-    color: colors.primary,
+    color: theme.primary,
     marginTop: spacing.xs,
   },
   editButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: borderRadius.md,
   },
   editButtonText: {
     ...typography.body,
-    color: colors.primary,
+    color: theme.primary,
     marginRight: spacing.xs,
   },
   menuContainer: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     marginBottom: spacing.md,
   },
   separator: {
     height: 1,
-    backgroundColor: colors.border,
+    backgroundColor: theme.border,
     marginHorizontal: spacing.md,
   },
   menuItem: {
@@ -430,7 +462,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   menuItemRight: {
     flexDirection: 'row',
@@ -441,32 +473,32 @@ const styles = StyleSheet.create({
   },
   menuLabel: {
     ...typography.body,
-    color: colors.text,
+    color: theme.text,
     marginRight: spacing.md,
   },
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.white,
+    backgroundColor: theme.surface,
     paddingVertical: spacing.md,
     marginBottom: spacing.md,
   },
   logoutText: {
     ...typography.bodyMedium,
-    color: colors.error,
+    color: theme.error,
     marginRight: spacing.sm,
   },
   version: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
     textAlign: 'center',
     paddingVertical: spacing.lg,
   },
   // Modal styles
   modalContainer: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -475,20 +507,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.white,
+    borderBottomColor: theme.border,
+    backgroundColor: theme.surface,
   },
   cancelText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   modalTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
   },
   saveText: {
     ...typography.body,
-    color: colors.primary,
+    color: theme.primary,
   },
   modalContent: {
     flex: 1,
@@ -499,16 +531,17 @@ const styles = StyleSheet.create({
   },
   label: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.sm,
   },
   input: {
     ...typography.body,
+    color: theme.text,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: theme.border,
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
   },
 });

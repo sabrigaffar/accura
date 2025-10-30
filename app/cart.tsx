@@ -75,7 +75,7 @@ export default function CartScreen() {
       <View style={styles.itemImage} />
       <View style={styles.itemInfo}>
         <Text style={styles.itemName}>{item.name}</Text>
-        <Text style={styles.itemPrice}>{item.price} ريال</Text>
+        <Text style={styles.itemPrice}>{item.price} جنيه</Text>
       </View>
       <View style={styles.quantityContainer}>
         <TouchableOpacity 
@@ -92,7 +92,7 @@ export default function CartScreen() {
           <Plus size={16} color={colors.text} />
         </TouchableOpacity>
       </View>
-      <Text style={styles.itemTotal}>{(item.price * item.quantity).toFixed(2)} ريال</Text>
+      <Text style={styles.itemTotal}>{(item.price * item.quantity).toFixed(2)} جنيه</Text>
       <TouchableOpacity 
         style={styles.removeButton}
         onPress={() => removeItem(item.id)}
@@ -141,15 +141,15 @@ export default function CartScreen() {
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>سعر التوصيل</Text>
-              <Text style={styles.summaryValue}>10.00 ريال</Text>
+              <Text style={styles.summaryValue}>10.00 جنيه</Text>
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>الضريبة</Text>
-              <Text style={styles.summaryValue}>2.50 ريال</Text>
+              <Text style={styles.summaryValue}>2.50 جنيه</Text>
             </View>
             <View style={[styles.summaryRow, styles.totalRow]}>
               <Text style={styles.totalLabel}>المجموع الإجمالي</Text>
-              <Text style={styles.totalValue}>{(getTotalPrice() + 12.50).toFixed(2)} ريال</Text>
+              <Text style={styles.totalValue}>{(getTotalPrice() + 12.50).toFixed(2)} جنيه</Text>
             </View>
             
             <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckout}>

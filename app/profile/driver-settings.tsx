@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,19 +18,102 @@ import {
   Power,
   Trash2,
   ChevronRight,
+  DollarSign,
+  Bell,
+  MessageSquare,
 } from 'lucide-react-native';
-import { colors, spacing, typography, borderRadius } from '@/constants/theme';
+import { spacing, typography, borderRadius } from '@/constants/theme';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
+import { usePushNotifications } from '@/contexts/PushNotificationContext';
+import { SUPPORTED_CURRENCIES, getCurrencyByCode } from '@/constants/currencies';
 
 export default function DriverSettings() {
+  const { user } = useAuth();
+  const { theme, isDark, toggleTheme } = useTheme();
+  const { sendTestNotification } = usePushNotifications();
   const [settings, setSettings] = useState({
     darkMode: false,
     autoAcceptOrders: false,
     locationSharing: true,
     offlineMode: false,
   });
+  const [loading, setLoading] = useState(true);
+  const [selectedCurrency, setSelectedCurrency] = useState('SAR');
 
-  const toggleSetting = (key: keyof typeof settings) => {
-    setSettings((prev) => ({ ...prev, [key]: !prev[key] }));
+  // تحديث darkMode state من ThemeContext
+  useEffect(() => {
+    setSettings(prev => ({
+      ...prev,
+      darkMode: isDark,
+    }));
+  }, [isDark]);
+
+  // جلب الإعدادات من قاعدة البيانات
+  useEffect(() => {
+    const fetchSettings = async () => {
+      if (!user?.id) return;
+      try {
+        const { data, error } = await supabase
+          .from('driver_profiles')
+          .select('auto_accept_orders, is_online, preferred_currency')
+          .eq('id', user.id)
+          .single();
+        
+        if (error) throw error;
+        if (data) {
+          setSettings(prev => ({
+            ...prev,
+            autoAcceptOrders: data.auto_accept_orders || false,
+            offlineMode: !data.is_online,
+          }));
+          setSelectedCurrency(data.preferred_currency || 'SAR');
+        }
+      } catch (e) {
+        console.error('fetch settings error:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchSettings();
+  }, [user?.id]);
+
+  const toggleSetting = async (key: keyof typeof settings) => {
+    // Dark Mode يتم التعامل معه بشكل منفصل
+    if (key === 'darkMode') {
+      toggleTheme();
+      // لا حاجة لتحديث state - سيتم تلقائياً عبر useEffect
+      return;
+    }
+
+    const newValue = !settings[key];
+    setSettings((prev) => ({ ...prev, [key]: newValue }));
+
+    // حفظ في قاعدة البيانات
+    if (!user?.id) return;
+    try {
+      if (key === 'autoAcceptOrders') {
+        const { error } = await supabase
+          .from('driver_profiles')
+          .update({ auto_accept_orders: newValue })
+          .eq('id', user.id);
+        if (error) throw error;
+        Alert.alert('✅ تم الحفظ', `تم ${newValue ? 'تفعيل' : 'إيقاف'} قبول الطلبات تلقائياً`);
+      } else if (key === 'offlineMode') {
+        const { error } = await supabase
+          .from('driver_profiles')
+          .update({ is_online: !newValue })
+          .eq('id', user.id);
+        if (error) throw error;
+        Alert.alert('✅ تم الحفظ', `تم ${newValue ? 'تفعيل' : 'إيقاف'} وضع غير متصل`);
+      }
+    } catch (e) {
+      console.error('save setting error:', e);
+      // عكس التغيير في حالة الخطأ
+      setSettings((prev) => ({ ...prev, [key]: !newValue }));
+      Alert.alert('❌ خطأ', 'فشل حفظ الإعداد. حاول مرة أخرى.');
+    }
   };
 
   const handleClearCache = () => {
@@ -69,7 +152,6 @@ export default function DriverSettings() {
       title: 'الوضع الليلي',
       description: 'تفعيل المظهر الداكن',
       key: 'darkMode' as const,
-      badge: 'قريباً',
     },
     {
       icon: Power,
@@ -91,12 +173,67 @@ export default function DriverSettings() {
     },
   ];
 
+  const handleCurrencyChange = () => {
+    const currencyOptions = SUPPORTED_CURRENCIES.map(c => ({
+      text: `${c.symbol} ${c.nameAr}`,
+      onPress: () => saveCurrency(c.code),
+    }));
+    
+    Alert.alert(
+      '💰 اختر العملة',
+      'اختر العملة المفضلة لعرض الأسعار',
+      [
+        ...currencyOptions,
+        { text: 'إلغاء', style: 'cancel' },
+      ]
+    );
+  };
+
+  const saveCurrency = async (currencyCode: string) => {
+    if (!user?.id) return;
+    try {
+      const { error } = await supabase
+        .from('driver_profiles')
+        .update({ preferred_currency: currencyCode })
+        .eq('id', user.id);
+      
+      if (error) throw error;
+      
+      setSelectedCurrency(currencyCode);
+      const currency = getCurrencyByCode(currencyCode);
+      Alert.alert('✅ تم الحفظ', `تم تغيير العملة إلى ${currency.nameAr}`);
+    } catch (e) {
+      console.error('save currency error:', e);
+      Alert.alert('❌ خطأ', 'فشل حفظ العملة');
+    }
+  };
+
+  const styles = createStyles(theme);
+
   const actionSettings = [
     {
       icon: Globe,
       title: 'اللغة',
-      description: 'العربية',
-      onPress: () => Alert.alert('قريباً', 'خيارات اللغة قيد التطوير'),
+      description: 'العربية (قيد التطوير)',
+      onPress: () => Alert.alert('🚧 قيد التطوير', 'سيتم إضافة دعم اللغة الإنجليزية قريباً'),
+    },
+    {
+      icon: DollarSign,
+      title: 'العملة',
+      description: getCurrencyByCode(selectedCurrency).nameAr,
+      onPress: handleCurrencyChange,
+    },
+    {
+      icon: Bell,
+      title: 'إشعار تجريبي',
+      description: 'اختبر نظام الإشعارات',
+      onPress: sendTestNotification,
+    },
+    {
+      icon: MessageSquare,
+      title: 'الدعم الفني',
+      description: 'تواصل مع فريق الدعم',
+      onPress: () => router.push('/support/tickets' as any),
     },
     {
       icon: Trash2,
@@ -111,7 +248,7 @@ export default function DriverSettings() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <ArrowLeft size={24} color={colors.text} />
+          <ArrowLeft size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>الإعدادات</Text>
         <View style={styles.headerRight} />
@@ -131,25 +268,19 @@ export default function DriverSettings() {
                 ]}
               >
                 <View style={styles.settingIcon}>
-                  <item.icon size={20} color={colors.primary} />
+                  <item.icon size={20} color={theme.primary} />
                 </View>
                 <View style={styles.settingContent}>
                   <View style={styles.settingTitleRow}>
                     <Text style={styles.settingTitle}>{item.title}</Text>
-                    {item.badge && (
-                      <View style={styles.badge}>
-                        <Text style={styles.badgeText}>{item.badge}</Text>
-                      </View>
-                    )}
                   </View>
                   <Text style={styles.settingDescription}>{item.description}</Text>
                 </View>
                 <Switch
                   value={settings[item.key]}
                   onValueChange={() => toggleSetting(item.key)}
-                  trackColor={{ false: colors.border, true: colors.primary }}
-                  thumbColor={colors.white}
-                  disabled={!!item.badge}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                  thumbColor={theme.white}
                 />
               </View>
             ))}
@@ -170,13 +301,13 @@ export default function DriverSettings() {
                 onPress={item.onPress}
               >
                 <View style={styles.settingIcon}>
-                  <item.icon size={20} color={colors.primary} />
+                  <item.icon size={20} color={theme.primary} />
                 </View>
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>{item.title}</Text>
                   <Text style={styles.settingDescription}>{item.description}</Text>
                 </View>
-                <ChevronRight size={20} color={colors.textLight} />
+                <ChevronRight size={20} color={theme.textLight} />
               </TouchableOpacity>
             ))}
           </View>
@@ -186,14 +317,14 @@ export default function DriverSettings() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>منطقة الخطر</Text>
           <TouchableOpacity style={styles.dangerButton} onPress={handleDeleteAccount}>
-            <Trash2 size={20} color={colors.error} />
+            <Trash2 size={20} color={theme.error} />
             <View style={styles.dangerContent}>
               <Text style={styles.dangerTitle}>حذف الحساب</Text>
               <Text style={styles.dangerDescription}>
                 حذف حسابك بشكل نهائي من التطبيق
               </Text>
             </View>
-            <ChevronRight size={20} color={colors.error} />
+            <ChevronRight size={20} color={theme.error} />
           </TouchableOpacity>
         </View>
 
@@ -206,26 +337,26 @@ export default function DriverSettings() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: spacing.lg,
-    backgroundColor: colors.white,
+    backgroundColor: theme.card,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   backButton: {
     padding: spacing.xs,
   },
   headerTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
   },
   headerRight: {
     width: 40,
@@ -239,22 +370,22 @@ const styles = StyleSheet.create({
   sectionTitle: {
     ...typography.h3,
     fontSize: 16,
-    color: colors.text,
+    color: theme.text,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.sm,
   },
   card: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.card,
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: colors.border,
+    borderColor: theme.border,
   },
   settingItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   lastItem: {
     borderBottomWidth: 0,
@@ -263,7 +394,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: colors.primary + '10',
+    backgroundColor: theme.primary + '10',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: spacing.md,
@@ -279,10 +410,10 @@ const styles = StyleSheet.create({
   },
   settingTitle: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
   },
   badge: {
-    backgroundColor: colors.secondary + '20',
+    backgroundColor: theme.secondary + '20',
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
     borderRadius: borderRadius.sm,
@@ -290,20 +421,20 @@ const styles = StyleSheet.create({
   badgeText: {
     ...typography.caption,
     fontSize: 10,
-    color: colors.secondary,
+    color: theme.secondary,
   },
   settingDescription: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   dangerButton: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: spacing.lg,
-    backgroundColor: colors.white,
+    backgroundColor: theme.card,
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: colors.error + '30',
+    borderColor: theme.error + '30',
   },
   dangerContent: {
     flex: 1,
@@ -311,12 +442,12 @@ const styles = StyleSheet.create({
   },
   dangerTitle: {
     ...typography.bodyMedium,
-    color: colors.error,
+    color: theme.error,
     marginBottom: spacing.xs,
   },
   dangerDescription: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   versionContainer: {
     alignItems: 'center',
@@ -324,6 +455,6 @@ const styles = StyleSheet.create({
   },
   versionText: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
 });

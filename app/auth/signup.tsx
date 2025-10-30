@@ -65,18 +65,21 @@ type UserType = 'customer' | 'merchant' | 'driver';
 export default function SignUpScreen() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState(''); // اختياري
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [userType, setUserType] = useState<UserType>('customer'); // نوع المستخدم الافتراضي
+  const [userType, setUserType] = useState<UserType>('customer');
   const [loading, setLoading] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otp, setOtp] = useState('');
   const [selectedCountry, setSelectedCountry] = useState({
-    code: '+20',
-    name: 'مصر',
-    flag: 'EG'
+    code: '+966',
+    name: 'السعودية',
+    flag: 'SA'
   });
+  
+  // حالة OTP
+  const [showOtpInput, setShowOtpInput] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [tempUserData, setTempUserData] = useState<any>(null);
 
   const signUp = async () => {
     // التحقق من صحة البيانات
@@ -87,6 +90,11 @@ export default function SignUpScreen() {
 
     if (!email.trim() || !email.includes('@')) {
       Alert.alert('خطأ', 'الرجاء إدخال بريد إلكتروني صحيح');
+      return;
+    }
+
+    if (!phone.trim()) {
+      Alert.alert('خطأ', 'رقم الجوال مطلوب');
       return;
     }
 
@@ -106,98 +114,231 @@ export default function SignUpScreen() {
     }
 
     setLoading(true);
-    const cleanPhone = phone.replace(/\D/g, '');
-    const formattedPhone = `${selectedCountry.code}${cleanPhone.replace(/^0+/, '')}`;
 
     try {
-      console.log('Sending OTP to email:', email);
-      console.log('User data:', { fullName, formattedPhone, userType });
-      
-      // إرسال OTP إلى البريد الإلكتروني
-      const { data, error } = await supabase.auth.signInWithOtp({
-        email: email.trim().toLowerCase(),
+      // تنسيق رقم الهاتف إذا تم إدخاله
+      let formattedPhone = null;
+      if (phone.trim()) {
+        const cleanPhone = phone.replace(/\D/g, '');
+        formattedPhone = `${selectedCountry.code}${cleanPhone.replace(/^0+/, '')}`;
+        console.log('Phone formatted:', formattedPhone);
+      } else {
+        console.log('No phone number entered');
+      }
+
+      // إنشاء الحساب باستخدام Email + Password
+      const signUpData: any = {
+        email: email.trim(),
+        password: password,
         options: {
           data: {
             full_name: fullName.trim(),
-            phone_number: formattedPhone,
-            user_type: userType,
+            role: userType,
           },
-          shouldCreateUser: true,
-        }
-      });
+        },
+      };
 
+      // إضافة رقم الهاتف إذا كان موجوداً
+      if (formattedPhone) {
+        signUpData.phone = formattedPhone;
+        signUpData.options.data.phone = formattedPhone;
+      }
+
+      if (formattedPhone) {
+        const { data: existing, error: existingError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('phone_number', formattedPhone)
+          .limit(1)
+          .maybeSingle();
+        if (!existingError && existing) {
+          setLoading(false);
+          Alert.alert('خطأ', 'رقم الهاتف مستخدم بالفعل. الرجاء استخدام رقم آخر.');
+          return;
+        }
+      }
+
+      const { data, error } = await supabase.auth.signUp(signUpData);
+
+      // التحقق من الإيميل المسجل مسبقاً
       if (error) {
-        console.error('OTP Send Error:', error);
+        if (error.message.includes('already registered') || error.message.includes('User already registered')) {
+          setLoading(false);
+          Alert.alert(
+            'البريد مسجل مسبقاً',
+            'هذا البريد الإلكتروني موجود بالفعل. \nهل تريد تسجيل الدخول؟',
+            [
+              { text: 'إلغاء', style: 'cancel' },
+              { 
+                text: 'تسجيل الدخول', 
+                onPress: () => router.push('/auth/login' as any)
+              },
+            ]
+          );
+          return;
+        }
         throw error;
       }
 
+      // حفظ البيانات مؤقتاً لإنشاء profile بعد التحقق
+      const tempData = {
+        userId: data.user?.id,
+        fullName: fullName.trim(),
+        formattedPhone,
+        userType,
+      };
+      console.log('Saving tempUserData:', tempData);
+      setTempUserData(tempData);
+
+      // إظهار مربع OTP
+      setShowOtpInput(true);
       setLoading(false);
-      setOtpSent(true);
       
-      console.log('OTP sent successfully to:', email);
       Alert.alert(
-        'تم إرسال رمز التأكيد',
-        `تم إرسال رمز مكون من 6 أرقام إلى ${email}. يُرجى إدخال الرمز أدناه.`
+        'تم إرسال رمز التحقق',
+        'تم إرسال رمز مكون من 6 أرقام إلى بريدك الإلكتروني. يرجى إدخاله لإكمال التسجيل.'
       );
     } catch (error: any) {
-      setLoading(false);
-      console.error('Signup Error:', error);
+      console.error('Sign up error:', error);
       
-      let errorMessage = 'حدث خطأ أثناء إرسال رمز التأكيد';
-      if (error.message?.includes('already registered')) {
-        errorMessage = 'هذا البريد الإلكتروني مستخدم بالفعل';
+      let errorMessage = 'حدث خطأ أثناء التسجيل';
+      
+      if (error.message?.includes('User already registered')) {
+        errorMessage = 'هذا البريد الإلكتروني مسجل بالفعل';
+      } else if (error.message?.includes('invalid email')) {
+        errorMessage = 'البريد الإلكتروني غير صحيح';
+      } else if (error.message) {
+        errorMessage = error.message;
       }
       
-      Alert.alert('خطأ', errorMessage + ': ' + (error.message || error));
+      Alert.alert('خطأ في التسجيل', errorMessage);
+    } finally {
+      setLoading(false);
     }
   };
 
+  // دالة للتحقق من OTP
   const verifyOtp = async () => {
-    if (!otp || otp.length !== 6) {
-      Alert.alert('خطأ', 'الرجاء إدخال رمز التأكيد بشكل صحيح (6 أرقام)');
+    if (!otpCode || otpCode.length !== 6) {
+      Alert.alert('خطأ', 'يرجى إدخال رمز التحقق المكون من 6 أرقام');
       return;
     }
 
     setLoading(true);
 
     try {
+      // التحقق من OTP
       const { data, error } = await supabase.auth.verifyOtp({
-        email: email.trim().toLowerCase(),
-        token: otp,
-        type: 'email',
+        email: email.trim(),
+        token: otpCode,
+        type: 'signup',
       });
 
-      if (error) {
-        throw error;
+      if (error) throw error;
+
+      // الآن المستخدم مسجل دخول، يمكننا إنشاء profile
+      if (data.user && tempUserData) {
+        const phoneToSave = tempUserData.formattedPhone || null;
+        if (!phoneToSave) {
+          Alert.alert('خطأ', 'رقم الهاتف مفقود. الرجاء العودة وإدخال رقم هاتف صالح.');
+          setLoading(false);
+          return;
+        }
+
+        const { data: existing, error: existingError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('phone_number', phoneToSave)
+          .limit(1)
+          .maybeSingle();
+        if (!existingError && existing && existing.id !== data.user.id) {
+          Alert.alert('خطأ', 'رقم الهاتف مستخدم بالفعل. الرجاء استخدام رقم آخر.');
+          setLoading(false);
+          return;
+        }
+
+        const profileData = {
+          id: data.user.id,
+          full_name: tempUserData.fullName,
+          phone_number: phoneToSave,
+          user_type: tempUserData.userType,
+          is_active: true,
+          created_at: new Date().toISOString(),
+        };
+
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .upsert(profileData, {
+            onConflict: 'id',
+          });
+
+        if (profileError) {
+          if ((profileError as any).code === '23505') {
+            Alert.alert('خطأ', 'رقم الهاتف مستخدم بالفعل. الرجاء استخدام رقم آخر.');
+          } else {
+            Alert.alert('خطأ', 'حدث خطأ في إنشاء الملف الشخصي');
+          }
+          setLoading(false);
+          return;
+        }
       }
 
-      if (data.session) {
-        setLoading(false);
-        console.log('User verified successfully!');
-        console.log('User ID:', data.user?.id);
-        console.log('User type:', userType);
-        
-        Alert.alert(
-          'تم إنشاء الحساب بنجاح',
-          `مرحباً ${fullName}! تم إنشاء حسابك كـ${userType === 'customer' ? 'عميل' : userType === 'merchant' ? 'تاجر' : 'سائق'} بنجاح!`,
-          [
-            {
-              text: 'تابع',
-              onPress: () => router.replace('/(tabs)' as any)
-            }
-          ]
-        );
-      }
+      // رسالة ترحيب
+      const welcomeMessage = tempUserData?.userType === 'merchant' 
+        ? 'مرحباً بك! يرجى إكمال معلومات متجرك لبدء البيع.'
+        : tempUserData?.userType === 'driver'
+        ? 'مرحباً بك! يرجى إكمال معلومات السائق لبدء استلام الطلبات.'
+        : 'مرحباً بك! تم إنشاء حسابك بنجاح.';
+
+      Alert.alert(
+        'تم التحقق بنجاح! 🎉',
+        welcomeMessage,
+        [
+          {
+            text: 'متابعة',
+            onPress: () => {
+              // انتظر قليلاً قبل التوجيه للسماح للـ Alert بالإغلاق
+              setTimeout(() => {
+                // التوجيه حسب نوع المستخدم
+                if (tempUserData?.userType === 'merchant') {
+                  router.replace('/auth/setup-merchant' as any);
+                } else if (tempUserData?.userType === 'driver') {
+                  router.replace('/auth/setup-driver' as any);
+                } else {
+                  router.replace('/auth/complete-profile' as any);
+                }
+              }, 100);
+            },
+          },
+        ]
+      );
     } catch (error: any) {
+      console.error('OTP verification error:', error);
+      Alert.alert(
+        'خطأ في التحقق',
+        error.message || 'رمز التحقق غير صحيح. يرجى المحاولة مرة أخرى.'
+      );
+    } finally {
       setLoading(false);
-      console.error('OTP Verification Error:', error);
-      
-      let errorMessage = 'حدث خطأ أثناء تأكيد الرمز';
-      if (error.message?.includes('invalid') || error.message?.includes('expired')) {
-        errorMessage = 'رمز التأكيد غير صحيج أو انتهت صلاحيته';
-      }
-      
-      Alert.alert('خطأ', errorMessage + ': ' + (error.message || error));
+    }
+  };
+
+  // دالة لإعادة إرسال OTP
+  const resendOtp = async () => {
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email.trim(),
+      });
+
+      if (error) throw error;
+
+      Alert.alert('تم الإرسال', 'تم إعادة إرسال رمز التحقق إلى بريدك الإلكتروني');
+    } catch (error: any) {
+      Alert.alert('خطأ', error.message || 'فشل إعادة إرسال الرمز');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -307,7 +448,7 @@ export default function SignUpScreen() {
           </View>
 
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>رقم الجوال</Text>
+            <Text style={styles.label}>رقم الهاتف</Text>
             <View style={styles.phoneInputWrapper}>
               <CountryPicker
                 selectedCountry={selectedCountry}
@@ -318,7 +459,7 @@ export default function SignUpScreen() {
               />
               <TextInput
                 style={styles.phoneInput}
-                placeholder="رقم الجوال"
+                placeholder="رقم الهاتف"
                 value={phone}
                 onChangeText={setPhone}
                 keyboardType="phone-pad"
@@ -326,7 +467,7 @@ export default function SignUpScreen() {
               />
             </View>
             <Text style={styles.helperText}>
-              مثال: {selectedCountry.code === '+20' ? '1002229388' : 'أدخل رقمك بدون رمز البلد'}
+              يمكن استخدامه لاسترجاع كلمة المرور أو التحقق من الحساب
             </Text>
           </View>
 
@@ -355,51 +496,47 @@ export default function SignUpScreen() {
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 secureTextEntry
-                editable={!loading && !otpSent}
+                editable={!loading}
               />
             </View>
           </View>
 
-          {otpSent && (
+          {/* مربع OTP */}
+          {showOtpInput && (
             <View style={styles.otpContainer}>
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>رمز التأكيد (OTP)</Text>
-                <View style={styles.inputWrapper}>
-                  <Mail size={20} color={colors.textLight} style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="أدخل الرمز المرسل إلى بريدك"
-                    value={otp}
-                    onChangeText={setOtp}
-                    keyboardType="number-pad"
-                    maxLength={6}
-                    editable={!loading}
-                    autoFocus
-                  />
-                </View>
-                <Text style={styles.helperText}>
-                  تم إرسال رمز التأكيد إلى {email}
-                </Text>
+              <Text style={styles.otpTitle}>رمز التحقق</Text>
+              <Text style={styles.otpSubtitle}>
+                تم إرسال رمز مكون من 6 أرقام إلى {email}
+              </Text>
+              <View style={styles.inputWrapper}>
+                <Mail size={20} color={colors.textLight} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="123456"
+                  value={otpCode}
+                  onChangeText={setOtpCode}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  editable={!loading}
+                  autoFocus
+                />
               </View>
-
+              
               <TouchableOpacity
-                style={[styles.signUpButton, loading && styles.signUpButtonDisabled]}
+                style={[styles.button, loading && styles.buttonDisabled]}
                 onPress={verifyOtp}
                 disabled={loading}
               >
                 {loading ? (
                   <ActivityIndicator color={colors.white} />
                 ) : (
-                  <Text style={styles.signUpButtonText}>تأكيد وإنشاء الحساب</Text>
+                  <Text style={styles.buttonText}>تحقق</Text>
                 )}
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.resendButton}
-                onPress={() => {
-                  setOtp('');
-                  signUp();
-                }}
+                onPress={resendOtp}
                 disabled={loading}
               >
                 <Text style={styles.resendButtonText}>إعادة إرسال الرمز</Text>
@@ -407,7 +544,8 @@ export default function SignUpScreen() {
             </View>
           )}
 
-          {!otpSent && (
+          {/* زر إنشاء الحساب */}
+          {!showOtpInput && (
             <TouchableOpacity
               style={[styles.signUpButton, loading && styles.signUpButtonDisabled]}
               onPress={signUp}
@@ -416,14 +554,14 @@ export default function SignUpScreen() {
               {loading ? (
                 <ActivityIndicator color={colors.white} />
               ) : (
-                <Text style={styles.signUpButtonText}>إرسال رمز التأكيد</Text>
+                <Text style={styles.signUpButtonText}>إنشاء حساب</Text>
               )}
             </TouchableOpacity>
           )}
 
           <View style={styles.footer}>
             <Text style={styles.footerText}>لديك حساب بالفعل؟</Text>
-            <TouchableOpacity onPress={() => router.replace('/auth')}>
+            <TouchableOpacity onPress={() => router.push('/auth/login' as any)}>
               <Text style={styles.footerLink}>تسجيل الدخول</Text>
             </TouchableOpacity>
           </View>
@@ -590,6 +728,18 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  otpTitle: {
+    ...typography.h3,
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+  otpSubtitle: {
+    ...typography.caption,
+    color: colors.textLight,
+    textAlign: 'center',
+    marginBottom: spacing.md,
   },
   resendButton: {
     alignItems: 'center',

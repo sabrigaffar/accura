@@ -5,6 +5,8 @@ import { Plus, Package, Edit, Trash2, ToggleLeft, ToggleRight, Search } from 'lu
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
+import { useActiveStore } from '@/contexts/ActiveStoreContext';
+import { StoreButton } from '@/components/StoreSelector';
 
 interface Product {
   id: string;
@@ -23,24 +25,49 @@ export default function MerchantProducts() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const { activeStore, stores, isAllStoresSelected } = useActiveStore();
 
   useEffect(() => {
-    fetchProducts();
-  }, []);
+    if (activeStore || isAllStoresSelected) {
+      fetchProducts();
+    }
+  }, [activeStore, isAllStoresSelected]);
 
   const fetchProducts = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      if (!activeStore && !isAllStoresSelected) return;
 
-      const { data, error } = await supabase
+      let query = supabase
         .from('products')
         .select('*')
-        .eq('merchant_id', user.id)
-        .order('created_at', { ascending: false });
+        .eq('merchant_id', user.id);
 
-      if (error) throw error;
-      setProducts(data || []);
+      if (isAllStoresSelected && stores.length > 0) {
+        // جلب منتجات جميع المتاجر
+        const storeIds = stores.map(s => s.id);
+        const { data, error } = await query.in('store_id', storeIds).order('created_at', { ascending: false });
+        if (error) throw error;
+        setProducts(data || []);
+      } else if (activeStore) {
+        // تصفية حسب المتجر النشط
+        const { data, error } = await query.eq('store_id', activeStore.id).order('created_at', { ascending: false });
+
+        if (error && error.code === '42703') {
+          // العمود store_id غير موجود
+          const fallback = await supabase
+            .from('products')
+            .select('*')
+            .eq('merchant_id', user.id)
+            .order('created_at', { ascending: false });
+          setProducts(fallback.data || []);
+        } else if (error) {
+          throw error;
+        } else {
+          setProducts(data || []);
+        }
+      }
     } catch (error: any) {
       console.error('Error fetching products:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء تحميل المنتجات');
@@ -122,11 +149,11 @@ export default function MerchantProducts() {
             <View style={styles.priceContainer}>
               {product.discount_price ? (
                 <>
-                  <Text style={styles.discountPrice}>{product.discount_price} ريال</Text>
-                  <Text style={styles.originalPrice}>{product.price} ريال</Text>
+                  <Text style={styles.discountPrice}>{product.discount_price} جنيه</Text>
+                  <Text style={styles.originalPrice}>{product.price} جنيه</Text>
                 </>
               ) : (
-                <Text style={styles.price}>{product.price} ريال</Text>
+                <Text style={styles.price}>{product.price} جنيه</Text>
               )}
             </View>
             <Text style={styles.quantity}>الكمية: {product.quantity}</Text>
@@ -168,7 +195,10 @@ export default function MerchantProducts() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>منتجاتي ({products.length})</Text>
+        <View style={styles.headerLeft}>
+          <Text style={styles.headerTitle}>منتجاتي ({products.length})</Text>
+          <StoreButton />
+        </View>
         <TouchableOpacity 
           style={styles.addButton}
           onPress={() => router.push('/merchant/add-product' as any)}
@@ -232,6 +262,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flex: 1,
   },
   headerTitle: {
     ...typography.h2,

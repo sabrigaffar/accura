@@ -13,6 +13,8 @@ import { Star, MessageSquare, Calendar } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { useActiveStore } from '@/contexts/ActiveStoreContext';
+import { StoreButton } from '@/components/StoreSelector';
 
 interface Review {
   id: string;
@@ -25,6 +27,7 @@ interface Review {
 
 export default function MerchantReviews() {
   const { user } = useAuth();
+  const { activeStore, stores, isAllStoresSelected } = useActiveStore();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -36,7 +39,7 @@ export default function MerchantReviews() {
 
   useEffect(() => {
     fetchReviews();
-  }, []);
+  }, [activeStore, isAllStoresSelected]);
 
   const fetchReviews = async () => {
     try {
@@ -136,6 +139,7 @@ export default function MerchantReviews() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>التقييمات</Text>
+        <StoreButton />
       </View>
 
       <ScrollView
@@ -234,6 +238,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: spacing.lg,
     backgroundColor: colors.white,
     borderBottomWidth: 1,

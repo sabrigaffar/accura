@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -16,12 +17,15 @@ import {
   MapPin,
   Phone,
   Clock,
+  Navigation2,
 } from 'lucide-react-native';
+import { useLocation } from '@/hooks/useLocation';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { getCachedUserRating } from '@/lib/ratingUtils';
+import { formatCurrency, DEFAULT_CURRENCY } from '@/constants/currencies';
 
 interface DriverProfile {
   id: string;
@@ -42,10 +46,14 @@ interface DriverProfile {
 
 export default function DriverProfileScreen() {
   const { profile } = useAuth();
+  const location = useLocation();
   const [driverProfile, setDriverProfile] = useState<DriverProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [averageRating, setAverageRating] = useState(0);
   const [totalReviews, setTotalReviews] = useState(0);
+  const [updatingLocation, setUpdatingLocation] = useState(false);
+  const [togglingStatus, setTogglingStatus] = useState(false);
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
 
   useEffect(() => {
     if (profile?.id) {
@@ -86,6 +94,11 @@ export default function DriverProfileScreen() {
           current_lng: data.current_lng,
           created_at: data.created_at,
         });
+        
+        // جلب العملة المفضلة
+        if (data.preferred_currency) {
+          setCurrency(data.preferred_currency);
+        }
       }
     } catch (error) {
       console.error('Error fetching driver profile:', error);
@@ -117,9 +130,10 @@ export default function DriverProfileScreen() {
   };
 
   const toggleOnlineStatus = async () => {
-    if (!driverProfile) return;
+    if (!driverProfile || togglingStatus) return;
     
     try {
+      setTogglingStatus(true);
       const newStatus = !driverProfile.is_online;
       
       const { error } = await supabase
@@ -132,15 +146,81 @@ export default function DriverProfileScreen() {
 
       if (error) throw error;
 
+      // تحديث الحالة محلياً
       setDriverProfile(prev => prev ? { ...prev, is_online: newStatus } : null);
       
+      // إعادة جلب البيانات للتأكد
+      setTimeout(() => {
+        fetchDriverProfile();
+      }, 500);
+      
       Alert.alert(
-        'نجاح', 
-        newStatus ? 'تم تفعيل وضعك على الإنترنت' : 'تم إيقاف وضعك على الإنترنت'
+        '✅ نجاح', 
+        newStatus ? 'تم تفعيل وضعك - أنت الآن متاح للتوصيل' : 'تم إيقاف وضعك - لن تستلم طلبات جديدة'
       );
     } catch (error) {
       console.error('Error updating online status:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء تحديث الحالة');
+      Alert.alert('❌ خطأ', 'حدث خطأ أثناء تحديث الحالة. حاول مرة أخرى.');
+    } finally {
+      setTogglingStatus(false);
+    }
+  };
+
+  const handleUpdateLocation = async () => {
+    if (!driverProfile) return;
+
+    try {
+      setUpdatingLocation(true);
+
+      // طلب الإذن للوصول إلى الموقع
+      const hasPermission = await location.requestPermission();
+      
+      if (!hasPermission) {
+        Alert.alert(
+          'تنبيه',
+          'يجب السماح بالوصول إلى الموقع لتحديث موقعك الحالي'
+        );
+        return;
+      }
+
+      // الحصول على الموقع الحالي
+      const userLocation = await location.getCurrentLocation();
+
+      if (!userLocation) {
+        Alert.alert('خطأ', 'تعذر الحصول على موقعك الحالي');
+        return;
+      }
+
+      // حفظ الموقع في قاعدة البيانات
+      const { error } = await supabase
+        .from('driver_profiles')
+        .update({
+          current_lat: userLocation.latitude,
+          current_lng: userLocation.longitude,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', driverProfile.id);
+
+      if (error) throw error;
+
+      // تحديث الحالة المحلية
+      setDriverProfile(prev => 
+        prev ? {
+          ...prev,
+          current_lat: userLocation.latitude,
+          current_lng: userLocation.longitude,
+        } : null
+      );
+
+      Alert.alert(
+        'نجاح',
+        `تم تحديث موقعك بنجاح\n📍 ${userLocation.latitude.toFixed(6)}, ${userLocation.longitude.toFixed(6)}`
+      );
+    } catch (error) {
+      console.error('Error updating location:', error);
+      Alert.alert('خطأ', 'حدث خطأ أثناء تحديث الموقع');
+    } finally {
+      setUpdatingLocation(false);
     }
   };
 
@@ -205,23 +285,31 @@ export default function DriverProfileScreen() {
           </View>
           
           {/* Status Toggle */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
-              styles.statusButton, 
-              driverProfile.is_online ? styles.onlineButton : styles.offlineButton
+              styles.statusButton,
+              driverProfile.is_online ? styles.onlineButton : styles.offlineButton,
+              togglingStatus && styles.statusButtonDisabled
             ]}
             onPress={toggleOnlineStatus}
+            disabled={togglingStatus}
           >
-            <View style={[
-              styles.statusIndicator,
-              { backgroundColor: driverProfile.is_online ? colors.success : colors.error }
-            ]} />
-            <Text style={[
-              styles.statusText,
-              { color: driverProfile.is_online ? colors.success : colors.error }
-            ]}>
-              {driverProfile.is_online ? 'متصل' : 'غير متصل'}
-            </Text>
+            {togglingStatus ? (
+              <ActivityIndicator size="small" color={driverProfile.is_online ? colors.success : colors.error} />
+            ) : (
+              <>
+                <View style={[
+                  styles.statusIndicator,
+                  { backgroundColor: driverProfile.is_online ? colors.success : colors.error }
+                ]} />
+                <Text style={[
+                  styles.statusText,
+                  { color: driverProfile.is_online ? colors.success : colors.error }
+                ]}>
+                  {driverProfile.is_online ? 'متصل' : 'غير متصل'}
+                </Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -232,7 +320,7 @@ export default function DriverProfileScreen() {
             <Text style={styles.statLabel}>عدد التوصيلات</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statValue}>{driverProfile.total_earnings.toFixed(2)} ريال</Text>
+            <Text style={styles.statValue}>{formatCurrency(driverProfile.total_earnings, currency)}</Text>
             <Text style={styles.statLabel}>إجمالي الأرباح</Text>
           </View>
         </View>
@@ -282,6 +370,55 @@ export default function DriverProfileScreen() {
             <Text style={styles.infoLabel}>رقم الجوال:</Text>
             <Text style={styles.infoValue}>{driverProfile.phone_number}</Text>
           </View>
+        </View>
+
+        {/* Current Location */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Navigation2 size={20} color={colors.primary} />
+            <Text style={styles.sectionTitle}>موقعي الحالي (GPS)</Text>
+          </View>
+
+          {driverProfile.current_lat && driverProfile.current_lng ? (
+            <>
+              <View style={styles.locationBox}>
+                <MapPin size={16} color={colors.success} />
+                <View style={styles.locationInfo}>
+                  <Text style={styles.locationLabel}>الإحداثيات:</Text>
+                  <Text style={styles.locationValue}>
+                    {driverProfile.current_lat.toFixed(6)}, {driverProfile.current_lng.toFixed(6)}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.locationNote}>
+                ✅ تم تحديد موقعك - سيتم استخدامه لحساب المسافة للطلبات القريبة
+              </Text>
+            </>
+          ) : (
+            <View style={styles.emptyLocationContainer}>
+              <Text style={styles.emptyText}>⚠️ لم يتم تحديد موقعك الحالي</Text>
+              <Text style={styles.emptyDescription}>
+                حدد موقعك الحالي لتتمكن من رؤية الطلبات القريبة منك
+              </Text>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={styles.updateLocationButton}
+            onPress={handleUpdateLocation}
+            disabled={updatingLocation}
+          >
+            {updatingLocation ? (
+              <ActivityIndicator size="small" color={colors.white} />
+            ) : (
+              <>
+                <Navigation2 size={20} color={colors.white} />
+                <Text style={styles.updateLocationButtonText}>
+                  {driverProfile.current_lat ? '🔄 تحديث موقعي' : '📍 تحديد موقعي الحالي'}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
         </View>
 
         {/* Account Info */}
@@ -408,6 +545,9 @@ const styles = StyleSheet.create({
   statusText: {
     ...typography.bodyMedium,
   },
+  statusButtonDisabled: {
+    opacity: 0.6,
+  },
   statsContainer: {
     flexDirection: 'row',
     marginBottom: spacing.md,
@@ -460,5 +600,63 @@ const styles = StyleSheet.create({
     ...typography.bodyMedium,
     color: colors.text,
     textAlign: 'left',
+  },
+  locationBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.success + '10',
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.sm,
+  },
+  locationInfo: {
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  locationLabel: {
+    ...typography.caption,
+    color: colors.textLight,
+    marginBottom: spacing.xs,
+  },
+  locationValue: {
+    ...typography.bodyMedium,
+    color: colors.text,
+    fontFamily: 'monospace',
+  },
+  locationNote: {
+    ...typography.caption,
+    color: colors.success,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+  },
+  emptyLocationContainer: {
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+  },
+  emptyText: {
+    ...typography.bodyMedium,
+    color: colors.warning,
+    marginBottom: spacing.xs,
+  },
+  emptyDescription: {
+    ...typography.caption,
+    color: colors.textLight,
+    textAlign: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  updateLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  updateLocationButtonText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    marginRight: spacing.sm,
   },
 });

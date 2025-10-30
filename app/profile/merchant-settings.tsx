@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,7 @@ import {
   ChevronRight,
 } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function MerchantSettings() {
   const [settings, setSettings] = useState({
@@ -28,6 +29,16 @@ export default function MerchantSettings() {
     storeOpen: true,
     offlineMode: false,
   });
+  const [currency, setCurrency] = useState('ريال');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const symbol = await AsyncStorage.getItem('app_currency_symbol');
+        if (symbol) setCurrency(symbol);
+      } catch {}
+    })();
+  }, []);
 
   const toggleSetting = (key: keyof typeof settings) => {
     setSettings((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -94,9 +105,33 @@ export default function MerchantSettings() {
   const actionSettings = [
     {
       icon: Globe,
-      title: 'اللغة',
-      description: 'العربية',
-      onPress: () => Alert.alert('قريباً', 'خيارات اللغة قيد التطوير'),
+      title: 'العملة',
+      description: currency,
+      onPress: async () => {
+        try {
+          const options = [
+            'ريال',
+            'جنيه',
+            'دولار $',
+            'درهم د.إ',
+            'يورو €',
+            'إلغاء',
+          ];
+
+          Alert.alert(
+            'اختر العملة',
+            'سيتم استخدام العملة المختارة في لوحة التحكم',
+            [
+              { text: options[0], onPress: async () => { setCurrency('ريال'); await AsyncStorage.setItem('app_currency_symbol', 'ريال'); } },
+              { text: options[1], onPress: async () => { setCurrency('جنيه'); await AsyncStorage.setItem('app_currency_symbol', 'جنيه'); } },
+              { text: options[2], onPress: async () => { setCurrency('دولار $'); await AsyncStorage.setItem('app_currency_symbol', 'دولار $'); } },
+              { text: options[3], onPress: async () => { setCurrency('درهم د.إ'); await AsyncStorage.setItem('app_currency_symbol', 'درهم د.إ'); } },
+              { text: options[4], onPress: async () => { setCurrency('يورو €'); await AsyncStorage.setItem('app_currency_symbol', 'يورو €'); } },
+              { text: options[5], style: 'cancel' },
+            ]
+          );
+        } catch {}
+      },
     },
     {
       icon: Clock,

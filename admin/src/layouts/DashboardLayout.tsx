@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import LanguageSwitcher from '../components/LanguageSwitcher';
@@ -108,6 +108,8 @@ const DashboardLayout = () => {
     { name: 'السائقون', icon: CarIcon, path: '/drivers' },
     { name: 'الطلبات', icon: ShoppingCartIcon, path: '/orders' },
     { name: 'التقارير', icon: BarChartIcon, path: '/reports' },
+    { name: 'اشتراكات المتاجر', icon: BarChartIcon, path: '/subscriptions' },
+    { name: 'محفظة المنصة', icon: BarChartIcon, path: '/wallet' },
     { name: 'الإعدادات', icon: SettingsIcon, path: '/settings' },
   ];
 

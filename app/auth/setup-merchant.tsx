@@ -8,12 +8,15 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
-import { ShoppingBag, MapPin, Clock } from 'lucide-react-native';
+import { ShoppingBag, MapPin, Clock, Upload, Image as ImageIcon, Phone } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadSingleImage } from '@/lib/imageUpload';
 
 // أنواع الفئات المتاحة للتاجر
 const MERCHANT_CATEGORIES = [
@@ -25,12 +28,39 @@ const MERCHANT_CATEGORIES = [
 ];
 
 export default function SetupMerchantScreen() {
-  const { user, profile } = useAuth();
+  const { user, profile, refreshProfile } = useAuth();
   const [merchantName, setMerchantName] = useState('');
   const [merchantDescription, setMerchantDescription] = useState('');
   const [category, setCategory] = useState('');
   const [address, setAddress] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
+  const [logoUri, setLogoUri] = useState<string | null>(null);
+  const [bannerUri, setBannerUri] = useState<string | null>(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
+
+  const pickImage = async (type: 'logo' | 'banner') => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: type === 'logo' ? [1, 1] : [16, 9],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        if (type === 'logo') {
+          setLogoUri(result.assets[0].uri);
+        } else {
+          setBannerUri(result.assets[0].uri);
+        }
+      }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('خطأ', 'فشل في اختيار الصورة');
+    }
+  };
 
   const createMerchantProfile = async () => {
     // التحقق من صحة البيانات
@@ -49,9 +79,30 @@ export default function SetupMerchantScreen() {
       return;
     }
 
+    if (!phoneNumber.trim()) {
+      Alert.alert('خطأ', 'الرجاء إدخال رقم هاتف المتجر');
+      return;
+    }
+
     setLoading(true);
 
     try {
+      // رفع الصور إذا كانت موجودة
+      let logoUrl = null;
+      let bannerUrl = null;
+
+      if (logoUri) {
+        setUploadingLogo(true);
+        logoUrl = await uploadSingleImage(logoUri, 'merchant-logos');
+        setUploadingLogo(false);
+      }
+
+      if (bannerUri) {
+        setUploadingBanner(true);
+        bannerUrl = await uploadSingleImage(bannerUri, 'merchant-banners');
+        setUploadingBanner(false);
+      }
+
       // إنشاء سجل في جدول merchants
       const { data, error } = await supabase
         .from('merchants')
@@ -61,6 +112,9 @@ export default function SetupMerchantScreen() {
           description_ar: merchantDescription,
           category: category,
           address: address,
+          phone_number: phoneNumber,
+          logo_url: logoUrl,
+          banner_url: bannerUrl,
           is_active: true,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -85,6 +139,9 @@ export default function SetupMerchantScreen() {
         throw profileError;
       }
 
+      // تحديث AuthContext ليعكس user_type الجديد
+      await refreshProfile();
+
       setLoading(false);
       Alert.alert(
         'تم بنجاح',
@@ -92,7 +149,11 @@ export default function SetupMerchantScreen() {
         [
           {
             text: 'متابعة',
-            onPress: () => router.replace('/(tabs)/merchants'),
+            onPress: () => {
+              setTimeout(() => {
+                router.replace('/(merchant-tabs)');
+              }, 100);
+            },
           },
         ]
       );
@@ -135,6 +196,85 @@ export default function SetupMerchantScreen() {
               onChangeText={setMerchantDescription}
               multiline
               numberOfLines={3}
+              editable={!loading}
+            />
+          </View>
+        </View>
+
+        {/* رفع شعار المتجر (Logo) */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>🎨 شعار المتجر (Logo)</Text>
+          <TouchableOpacity
+            style={styles.imageUploadButton}
+            onPress={() => pickImage('logo')}
+            disabled={loading || uploadingLogo}
+          >
+            {logoUri ? (
+              <Image source={{ uri: logoUri }} style={styles.logoPreview} />
+            ) : (
+              <View style={styles.imageUploadPlaceholder}>
+                <Upload size={32} color={colors.textLight} />
+                <Text style={styles.imageUploadText}>اضغط لرفع شعار المتجر</Text>
+                <Text style={styles.imageUploadHint}>(مربع 1:1 - اختياري)</Text>
+              </View>
+            )}
+            {uploadingLogo && (
+              <View style={styles.uploadingOverlay}>
+                <ActivityIndicator color={colors.white} />
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* رفع غلاف المتجر (Banner) */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>🖼️ غلاف المتجر (Banner)</Text>
+          <TouchableOpacity
+            style={styles.imageUploadButton}
+            onPress={() => pickImage('banner')}
+            disabled={loading || uploadingBanner}
+          >
+            {bannerUri ? (
+              <Image source={{ uri: bannerUri }} style={styles.bannerPreview} />
+            ) : (
+              <View style={styles.imageUploadPlaceholder}>
+                <ImageIcon size={32} color={colors.textLight} />
+                <Text style={styles.imageUploadText}>اضغط لرفع غلاف المتجر</Text>
+                <Text style={styles.imageUploadHint}>(16:9 - اختياري)</Text>
+              </View>
+            )}
+            {uploadingBanner && (
+              <View style={styles.uploadingOverlay}>
+                <ActivityIndicator color={colors.white} />
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>📍 عنوان المتجر</Text>
+          <View style={styles.inputWrapper}>
+            <MapPin size={20} color={colors.textLight} />
+            <TextInput
+              style={styles.input}
+              placeholder="عنوان المتجر بالتفصيل"
+              value={address}
+              onChangeText={setAddress}
+              editable={!loading}
+            />
+          </View>
+        </View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>📞 رقم هاتف المتجر</Text>
+          <View style={styles.inputWrapper}>
+            <Phone size={20} color={colors.textLight} />
+            <TextInput
+              style={styles.input}
+              placeholder="مثال: 0453462333"
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+              keyboardType="phone-pad"
               editable={!loading}
             />
           </View>
@@ -294,5 +434,51 @@ const styles = StyleSheet.create({
   buttonText: {
     ...typography.bodyMedium,
     color: colors.white,
+  },
+  imageUploadButton: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.lightGray,
+    padding: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 120,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  imageUploadPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageUploadText: {
+    ...typography.body,
+    color: colors.textLight,
+    marginTop: spacing.sm,
+  },
+  imageUploadHint: {
+    ...typography.caption,
+    color: colors.textLight,
+    marginTop: spacing.xs,
+  },
+  logoPreview: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+  },
+  bannerPreview: {
+    width: '100%',
+    height: 120,
+    borderRadius: borderRadius.md,
+  },
+  uploadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

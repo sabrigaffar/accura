@@ -19,6 +19,8 @@ import {
   HelpCircle,
   ChevronRight,
   ExternalLink,
+  BookOpen,
+  Shield,
 } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 
@@ -63,26 +65,26 @@ export default function CustomerHelp() {
     {
       icon: HelpCircle,
       title: 'الأسئلة الشائعة',
-      description: 'إجابات على أكثر الأسئلة شيوعاً',
-      onPress: () => Alert.alert('قريباً', 'قسم الأسئلة الشائعة قيد التطوير'),
+      subtitle: 'إجابات سريعة',
+      onPress: () => router.push('/help/faq' as any),
     },
     {
-      icon: FileText,
+      icon: BookOpen,
       title: 'دليل الاستخدام',
-      description: 'كيفية استخدام التطبيق',
-      onPress: () => Alert.alert('قريباً', 'دليل الاستخدام قيد التطوير'),
+      subtitle: 'تعلم كيفية استخدام التطبيق',
+      onPress: () => router.push('/help/user-guide' as any),
     },
     {
       icon: FileText,
       title: 'الشروط والأحكام',
-      description: 'اطلع على شروط الخدمة',
-      onPress: () => Alert.alert('قريباً', 'قسم الشروط والأحكام قيد التطوير'),
+      subtitle: 'اطلع على شروط الاستخدام',
+      onPress: () => router.push('/help/terms' as any),
     },
     {
-      icon: FileText,
+      icon: Shield,
       title: 'سياسة الخصوصية',
-      description: 'كيف نحمي بياناتك',
-      onPress: () => Alert.alert('قريباً', 'سياسة الخصوصية قيد التطوير'),
+      subtitle: 'كيف نحمي بياناتك',
+      onPress: () => router.push('/help/privacy' as any),
     },
   ];
 
@@ -161,7 +163,7 @@ export default function CustomerHelp() {
                 </View>
                 <View style={styles.helpContent}>
                   <Text style={styles.helpTitle}>{item.title}</Text>
-                  <Text style={styles.helpDescription}>{item.description}</Text>
+                  <Text style={styles.helpDescription}>{item.subtitle}</Text>
                 </View>
                 <ChevronRight size={20} color={colors.textLight} />
               </TouchableOpacity>

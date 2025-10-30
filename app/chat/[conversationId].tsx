@@ -173,24 +173,40 @@ export default function ChatScreen() {
   };
 
   const sendMessage = async () => {
-    if (!newMessage.trim() || !conversationId || !user) return;
-    
+    const convId = typeof conversationId === 'string' ? conversationId : undefined;
+    if (!newMessage.trim() || !convId || !user) return;
+
+    const text = newMessage.trim();
     setSending(true);
-    
+
     try {
-      const { error } = await supabase
+      // إرسال للسيرفر
+      const { data, error } = await supabase
         .from('chat_messages')
         .insert({
-          conversation_id: conversationId,
+          conversation_id: convId,
           sender_id: user.id,
-          message_text: newMessage.trim(),
+          message_text: text,
           is_read: false,
-        });
+        })
+        .select()
+        .single();
 
       if (error) throw error;
 
+      // تحديث متفائل محلي حتى لو تأخر الاشتراك اللحظي
+      const optimistic: Message = {
+        id: data?.id || Math.random().toString(36).slice(2),
+        conversation_id: convId,
+        sender_id: user.id,
+        message_text: text,
+        is_read: false,
+        created_at: data?.created_at || new Date().toISOString(),
+        sender: { full_name: 'أنت' },
+      };
+      setMessages(prev => [...prev, optimistic]);
       setNewMessage('');
-      
+
       // التمرير إلى الأسفل بعد إرسال الرسالة
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });

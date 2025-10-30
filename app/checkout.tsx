@@ -8,8 +8,10 @@ import {
   TextInput,
   Alert,
   Platform,
+  Linking,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as Location from 'expo-location';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { ArrowLeft, MapPin, CreditCard, Wallet, Plus, Minus } from 'lucide-react-native';
@@ -36,21 +38,120 @@ interface Address {
 
 export default function CheckoutScreen() {
   const { user } = useAuth();
-  const params = useLocalSearchParams<{ items?: string; merchantId?: string }>();
+  const params = useLocalSearchParams<{ 
+    items?: string; 
+    merchantId?: string;
+    selectedLat?: string;
+    selectedLon?: string;
+    selectedAddress?: string;
+  }>();
   const merchantIdParam = typeof params.merchantId === 'string' ? params.merchantId : undefined;
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
-
-  const [addresses, setAddresses] = useState<Address[]>([]);
-  const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
+  const [addresses, setAddresses] = useState<any[]>([]);
+  const [selectedAddress, setSelectedAddress] = useState<any>(null);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'wallet'>('cash');
   const [deliveryNotes, setDeliveryNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [calculatedDeliveryFee, setCalculatedDeliveryFee] = useState<number>(10);
+  const [calculatingFee, setCalculatingFee] = useState(false);
+  
+  // موقع مزقت من pick-location
+  const [temporaryLocation, setTemporaryLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    address: string;
+  } | null>(null);
+  
+  // موقع العميل الحالي (تلقائي حتى عند استخدام عنوان محفوظ)
+  const [currentLocation, setCurrentLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [locationPermissionDenied, setLocationPermissionDenied] = useState(false);
 
   useEffect(() => {
     if (user) {
-      fetchUserAddresses();
+      captureCurrentLocation(); // ✅ فقط التقاط الموقع - لا حاجة للعناوين
     }
   }, [user]);
+
+  // دالة التقاط الموقع الحالي
+  const captureCurrentLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('⚠️ Location permission denied');
+        setLocationPermissionDenied(true);
+        
+        // ✅ توجيه المستخدم لفتح GPS
+        Alert.alert(
+          'فتح تحديد الموقع',
+          'لحساب رسوم التوصيل بدقة، يجب تفعيل GPS من إعدادات الهاتف.\n\nاذهب إلى: الإعدادات > الموقع > تفعيل',
+          [
+            { text: 'إلغاء', style: 'cancel', onPress: () => router.back() },
+            {
+              text: 'فتح الإعدادات',
+              onPress: async () => {
+                if (Platform.OS === 'ios') {
+                  await Linking.openURL('app-settings:');
+                } else {
+                  await Linking.openURL('app-settings:');
+                }
+              }
+            }
+          ]
+        );
+        return;
+      }
+      
+      setLocationPermissionDenied(false);
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      setCurrentLocation({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+      
+      console.log('✅ Current location captured:', {
+        lat: location.coords.latitude,
+        lon: location.coords.longitude,
+      });
+      
+      // ✅ حساب رسوم التوصيل تلقائياً
+      if (merchantIdParam) {
+        calculateDeliveryFeeForLocation(
+          merchantIdParam,
+          location.coords.latitude,
+          location.coords.longitude
+        );
+      }
+    } catch (error) {
+      console.error('Error capturing current location:', error);
+      Alert.alert('تنبيه', 'لم يتمكن من تحديد موقعك تلقائياً. الرجاء تحديده يدوياً.');
+    }
+  };
+
+  // معالجة الموقع المؤقت من pick-location
+  useEffect(() => {
+    if (params.selectedLat && params.selectedLon) {
+      const lat = parseFloat(params.selectedLat as string);
+      const lon = parseFloat(params.selectedLon as string);
+      
+      setTemporaryLocation({
+        latitude: lat,
+        longitude: lon,
+        address: params.selectedAddress as string || 'موقع محدد',
+      });
+      
+      // حساب رسوم التوصيل بناءً على الموقع المؤقت
+      if (merchantIdParam) {
+        calculateDeliveryFeeForLocation(merchantIdParam, lat, lon);
+      }
+    }
+  }, [params.selectedLat, params.selectedLon, params.selectedAddress]);
 
   useEffect(() => {
     // Initialize cart items from route params if provided
@@ -59,26 +160,20 @@ export default function CheckoutScreen() {
         const parsed = JSON.parse(params.items) as Array<{ id: string; name: string; price: number; quantity: number }>; 
         setCartItems(parsed.map(p => ({ id: p.id, name: p.name, price: p.price, quantity: p.quantity, image_url: '' })));
       } catch (e) {
-        // If parsing fails, keep cart empty and user can navigate back
+        console.error('Error parsing cart items:', e);
+        Alert.alert(
+          'خطأ',
+          'حدث خطأ في تحميل منتجات السلة. الرجاء المحاولة مرة أخرى.',
+          [{ text: 'حسناً', onPress: () => router.back() }]
+        );
       }
     } else {
-      // fallback sample data if user came from cart screen
-      setCartItems([
-        {
-          id: '1',
-          name: 'برجر كلاسيك',
-          price: 25.0,
-          quantity: 2,
-          image_url: 'https://images.pexels.com/photos/1633578/pexels-photo-1633578.jpeg',
-        },
-        {
-          id: '2',
-          name: 'بطاطس مقلية',
-          price: 12.0,
-          quantity: 1,
-          image_url: 'https://images.pexels.com/photos/1596888/pexels-photo-1596888.jpeg',
-        },
-      ]);
+      // لا توجد منتجات - عرض رسالة والعودة
+      Alert.alert(
+        'سلة فارغة',
+        'لم يتم اختيار أي منتجات. الرجاء إضافة منتجات للسلة أولاً.',
+        [{ text: 'حسناً', onPress: () => router.back() }]
+      );
     }
   }, [params.items]);
 
@@ -96,11 +191,103 @@ export default function CheckoutScreen() {
       if (data && data.length > 0) {
         const defaultAddress = data.find(addr => addr.is_default) || data[0];
         setSelectedAddress(defaultAddress);
+        // ✅ لن نحسب رسوم التوصيل من العنوان - سنعتمد على الموقع الحالي
       }
     } catch (error) {
       console.error('Error fetching addresses:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء تحميل العناوين');
     }
+  };
+
+  // دالة حساب رسوم التوصيل بناءً على إحداثيات
+  const calculateDeliveryFeeForLocation = async (merchantId: string, lat: number, lon: number) => {
+    setCalculatingFee(true);
+    try {
+      const { data: merchant } = await supabase
+        .from('merchants')
+        .select('latitude, longitude')
+        .eq('id', merchantId)
+        .single();
+
+      if (merchant?.latitude && merchant?.longitude) {
+        const distance = calculateDistance(
+          merchant.latitude,
+          merchant.longitude,
+          lat,
+          lon
+        );
+        console.log('📏 Distance calculated:', distance.toFixed(2), 'km');
+        // تقريب المسافة لأعلى (أي كسر من الكيلو = كيلو كامل)
+        const roundedDistance = Math.ceil(distance);
+        console.log('🔼 Rounded distance:', roundedDistance, 'km');
+        // 10 جنيه لكل كيلومتر (حد أدنى 10 جنيه)
+        const fee = Math.max(roundedDistance * 10, 10);
+        console.log('💰 Calculated delivery fee:', fee, 'EGP');
+        setCalculatedDeliveryFee(fee);
+      }
+    } catch (error) {
+      console.error('Error calculating delivery fee:', error);
+    } finally {
+      setCalculatingFee(false);
+    }
+  };
+
+  // دالة حساب رسوم التوصيل
+  const calculateDeliveryFee = async (merchantId: string, addressId: string) => {
+    setCalculatingFee(true);
+    try {
+      // جلب موقع المتجر
+      const { data: merchant } = await supabase
+        .from('merchants')
+        .select('latitude, longitude')
+        .eq('id', merchantId)
+        .single();
+
+      // جلب موقع العميل
+      const { data: address } = await supabase
+        .from('addresses')
+        .select('latitude, longitude')
+        .eq('id', addressId)
+        .single();
+
+      if (merchant?.latitude && merchant?.longitude && address?.latitude && address?.longitude) {
+        // حساب المسافة (Haversine formula)
+        const distance = calculateDistance(
+          merchant.latitude,
+          merchant.longitude,
+          address.latitude,
+          address.longitude
+        );
+        
+        // تقريب المسافة لأعلى (أي كسر من الكيلو = كيلو كامل)
+        const roundedDistance = Math.ceil(distance);
+        
+        // حساب الرسوم: 10 جنيه/كم، حد أدنى 10 جنيه
+        const fee = Math.max(roundedDistance * 10, 10);
+        setCalculatedDeliveryFee(fee);
+      } else {
+        // إذا لم تتوفر المواقع، استخدم رسوم افتراضية
+        setCalculatedDeliveryFee(10);
+      }
+    } catch (error) {
+      console.error('Error calculating delivery fee:', error);
+      setCalculatedDeliveryFee(10); // رسوم افتراضية عند الخطأ
+    } finally {
+      setCalculatingFee(false);
+    }
+  };
+
+  // دالة حساب المسافة (Haversine formula)
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // نصف قطر الأرض بالكيلومتر
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
   };
 
   const updateQuantity = (id: string, change: number) => {
@@ -126,8 +313,9 @@ export default function CheckoutScreen() {
   };
 
   const handlePlaceOrder = async () => {
-    if (!selectedAddress) {
-      Alert.alert('خطأ', 'الرجاء اختيار عنوان التوصيل');
+    // ✅ التحقق من وجود موقع (تلقائي أو يدوي)
+    if (!temporaryLocation && !currentLocation) {
+      Alert.alert('خطأ', 'الرجاء السماح بالوصول للموقع أو تحديده يدوياً');
       return;
     }
 
@@ -162,22 +350,31 @@ export default function CheckoutScreen() {
     
     try {
       // إنشاء طلب جديد
-      const orderData = {
+      const orderData: any = {
         order_number: `ORD-${Date.now()}`,
         customer_id: user?.id,
-        merchant_id: merchantIdToUse, // تم تمريره أو اختيار بديل
+        merchant_id: merchantIdToUse,  // معرف المتجر (يتطابق مع FK)
+        store_id: merchantIdToUse,      // نفس القيمة (للتوافق مع النظام)
         status: 'pending',
-        delivery_address_id: selectedAddress.id,
         subtotal: getTotalPrice(),
-        delivery_fee: 10.00,
+        delivery_fee: calculatedDeliveryFee,
         service_fee: 2.50,
         tax: 1.50,
         discount: 0.00,
-        total: getTotalPrice() + 14.00,
+        total: getTotalPrice() + calculatedDeliveryFee + 4.00,
         payment_method: paymentMethod,
         payment_status: paymentMethod === 'cash' ? 'pending' : 'paid',
         delivery_notes: deliveryNotes,
       };
+
+      // ✅ حفظ الموقع فقط (تلقائي أو يدوي)
+      const locationToUse = temporaryLocation || currentLocation;
+      if (locationToUse) {
+        orderData.customer_latitude = locationToUse.latitude;
+        orderData.customer_longitude = locationToUse.longitude;
+        orderData.delivery_address_id = null; // ✅ لا نستخدم عناوين محفوظة
+        console.log('✅ Location added to order:', locationToUse);
+      }
 
       const { data, error } = await supabase
         .from('orders')
@@ -185,34 +382,53 @@ export default function CheckoutScreen() {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Order creation error:', error);
+        throw error;
+      }
+
+      console.log('✅ Order created successfully:', data);
 
       // إنشاء عناصر الطلب فقط إذا جاءت من صفحة المتجر (params.items موجودة)
       if (params.items && typeof params.items === 'string') {
         const orderItems = cartItems.map(item => ({
           order_id: data.id,
           product_id: item.id,
-          product_name_ar: item.name,
+          product_name: item.name,
           quantity: item.quantity,
-          unit_price: item.price,
-          total_price: item.price * item.quantity,
-          special_instructions: '',
+          price: item.price,
+          total: item.price * item.quantity,
         }));
 
         const { error: itemsError } = await supabase
           .from('order_items')
           .insert(orderItems);
 
-        if (itemsError) throw itemsError;
+        if (itemsError) {
+          console.error('Order items error:', itemsError);
+          throw itemsError;
+        }
+        
+        console.log('✅ Order items created successfully');
       }
 
-      // تفريغ السلة وإعادة توجيه المستخدم
-      Alert.alert('نجاح', 'تم إنشاء الطلب بنجاح', [
-        {
-          text: 'موافق',
-          onPress: () => router.replace(`/order/${data.id}`)
-        }
-      ]);
+      // حفظ معلومات الطلب قبل التوجيه
+      const orderNumber = data.order_number;
+      const orderId = data.id;
+      
+      console.log('🚀 Navigating to orders page...');
+
+      // التوجيه الفوري بدون Alert
+      router.replace('/(tabs)/orders');
+      
+      // عرض Toast notification بعد التوجيه
+      setTimeout(() => {
+        Alert.alert(
+          '✅ تم إنشاء الطلب بنجاح!', 
+          `رقم الطلب: ${orderNumber}\n\nحالة الطلب: قيد الانتظار`,
+          [{ text: 'حسناً' }]
+        );
+      }, 500);
     } catch (error) {
       console.error('Error placing order:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء إنشاء الطلب');
@@ -239,46 +455,25 @@ export default function CheckoutScreen() {
             <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
           </View>
           
-          {addresses.length === 0 ? (
-            <TouchableOpacity 
-              style={styles.addAddressButton}
-              onPress={() => router.push('/profile/addresses')}
-            >
-              <Text style={styles.addAddressText}>إضافة عنوان جديد</Text>
-            </TouchableOpacity>
+          {/* ✅ فقط عرض حالة الموقع التلقائي */}
+          {currentLocation ? (
+            <View style={[styles.addressCard, styles.temporaryLocationCard]}>
+              <View style={styles.addressHeader}>
+                <Text style={styles.addressTitle}>✅ تم تحديد موقعك تلقائياً</Text>
+                <View style={[styles.defaultBadge, { backgroundColor: colors.success }]}>
+                  <Text style={styles.defaultText}>جاهز</Text>
+                </View>
+              </View>
+              <Text style={styles.coordsText}>
+                📍 {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
+              </Text>
+            </View>
           ) : (
-            <View style={styles.addressList}>
-              {addresses.map(address => (
-                <TouchableOpacity
-                  key={address.id}
-                  style={[
-                    styles.addressCard,
-                    selectedAddress?.id === address.id && styles.selectedAddress
-                  ]}
-                  onPress={() => setSelectedAddress(address)}
-                >
-                  <View style={styles.addressHeader}>
-                    <Text style={styles.addressTitle}>{address.title}</Text>
-                    {address.is_default && (
-                      <View style={styles.defaultBadge}>
-                        <Text style={styles.defaultText}>افتراضي</Text>
-                      </View>
-                    )}
-                  </View>
-                  <Text style={styles.addressDetails}>
-                    {address.street_address}, {address.city}
-                    {address.district && `, ${address.district}`}
-                    {address.building_number && `, بناية ${address.building_number}`}
-                    {address.floor_number && `, دور ${address.floor_number}`}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity 
-                style={styles.addNewAddressButton}
-                onPress={() => router.push('/profile/addresses')}
-              >
-                <Text style={styles.addNewAddressText}>إضافة عنوان جديد</Text>
-              </TouchableOpacity>
+            <View style={styles.warningCard}>
+              <Text style={styles.warningTitle}>📍 جاري تحديد موقعك...</Text>
+              <Text style={styles.warningText}>
+                يرجى الانتظار بينما نحدد موقعك لحساب رسوم التوصيل
+              </Text>
             </View>
           )}
         </View>
@@ -294,7 +489,7 @@ export default function CheckoutScreen() {
             <View key={item.id} style={styles.cartItem}>
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.itemPrice}>{item.price} ريال</Text>
+                <Text style={styles.itemPrice}>{item.price} جنيه</Text>
               </View>
               <View style={styles.quantityContainer}>
                 <TouchableOpacity 
@@ -311,7 +506,7 @@ export default function CheckoutScreen() {
                   <Plus size={16} color={colors.text} />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.itemTotal}>{(item.price * item.quantity).toFixed(2)} ريال</Text>
+              <Text style={styles.itemTotal}>{(item.price * item.quantity).toFixed(2)} جنيه</Text>
               <TouchableOpacity 
                 style={styles.removeButton}
                 onPress={() => removeItem(item.id)}
@@ -392,23 +587,27 @@ export default function CheckoutScreen() {
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر المنتجات</Text>
-            <Text style={styles.summaryValue}>{getTotalPrice().toFixed(2)} ريال</Text>
+            <Text style={styles.summaryValue}>{getTotalPrice().toFixed(2)} جنيه</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر التوصيل</Text>
-            <Text style={styles.summaryValue}>10.00 ريال</Text>
+            {calculatingFee ? (
+              <Text style={styles.summaryValue}>جاري الحساب...</Text>
+            ) : (
+              <Text style={styles.summaryValue}>{calculatedDeliveryFee.toFixed(2)} جنيه</Text>
+            )}
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>رسوم الخدمة</Text>
-            <Text style={styles.summaryValue}>2.50 ريال</Text>
+            <Text style={styles.summaryValue}>2.50 جنيه</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>الضريبة</Text>
-            <Text style={styles.summaryValue}>1.50 ريال</Text>
+            <Text style={styles.summaryValue}>1.50 جنيه</Text>
           </View>
           <View style={[styles.summaryRow, styles.totalRow]}>
             <Text style={styles.totalLabel}>المجموع الإجمالي</Text>
-            <Text style={styles.totalValue}>{(getTotalPrice() + 14.00).toFixed(2)} ريال</Text>
+            <Text style={styles.totalValue}>{(getTotalPrice() + calculatedDeliveryFee + 4.00).toFixed(2)} جنيه</Text>
           </View>
         </View>
       </ScrollView>
@@ -668,5 +867,89 @@ const styles = StyleSheet.create({
   placeOrderText: {
     ...typography.bodyMedium,
     color: colors.white,
+  },
+  mapPickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.sm,
+    gap: spacing.sm,
+  },
+  mapPickerButtonText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    fontWeight: '600',
+  },
+  warningCard: {
+    backgroundColor: colors.warning + '20',
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.warning,
+    marginBottom: spacing.md,
+  },
+  warningTitle: {
+    ...typography.bodyMedium,
+    color: colors.warning,
+    marginBottom: spacing.xs,
+    fontWeight: 'bold',
+  },
+  warningText: {
+    ...typography.body,
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  permissionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    gap: spacing.sm,
+  },
+  permissionButtonText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    fontWeight: 'bold',
+  },
+  temporaryLocationCard: {
+    borderColor: colors.success,
+    borderWidth: 2,
+    backgroundColor: colors.success + '10',
+  },
+  coordsText: {
+    ...typography.caption,
+    color: colors.textLight,
+    marginTop: spacing.xs,
+    fontFamily: 'monospace',
+  },
+  changeLocationButton: {
+    marginTop: spacing.sm,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.sm,
+    alignSelf: 'flex-start',
+  },
+  changeLocationText: {
+    ...typography.small,
+    color: colors.white,
+    fontWeight: '600',
+  },
+  switchToAddressesButton: {
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+  },
+  switchToAddressesText: {
+    ...typography.body,
+    color: colors.primary,
+    textDecorationLine: 'underline',
   },
 });

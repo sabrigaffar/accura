@@ -18,6 +18,8 @@ import { I18nManager } from 'react-native';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { NotificationProvider } from '@/contexts/NotificationContext';
 import { ChatProvider } from '@/contexts/ChatContext';
+import { ThemeProvider } from '@/contexts/ThemeContext';
+import { PushNotificationProvider } from '@/contexts/PushNotificationContext';
 import { RoleNavigator } from '@/components/RoleNavigator';
 
 SplashScreen.preventAutoHideAsync();
@@ -50,15 +52,19 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <NotificationProvider>
-        <ChatProvider>
-          <RoleNavigator>
-            <StatusBar style="auto" />
-            <Stack screenOptions={{ headerShown: false }} />
-          </RoleNavigator>
-        </ChatProvider>
-      </NotificationProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <PushNotificationProvider>
+          <NotificationProvider>
+            <ChatProvider>
+              <RoleNavigator>
+                <StatusBar style="auto" />
+                <Stack screenOptions={{ headerShown: false }} />
+              </RoleNavigator>
+            </ChatProvider>
+          </NotificationProvider>
+        </PushNotificationProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

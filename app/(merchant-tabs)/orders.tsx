@@ -1,21 +1,41 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { ShoppingCart, Clock, CheckCircle, XCircle, Package } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
+import { useActiveStore } from '@/contexts/ActiveStoreContext';
+import { StoreButton } from '@/components/StoreSelector';
 
 interface Order {
   id: string;
+  order_number?: string;
   customer_id: string;
   status: string;
-  total_amount: number;
+  total: number;  // إجمالي العميل (legacy)
+  product_total?: number | null;
+  delivery_fee?: number | null;
+  service_fee?: number | null;
+  tax_amount?: number | null;
+  customer_total?: number | null;
   created_at: string;
-  delivery_address: any;
-  profiles: {
+  customer_latitude?: number | string | null;
+  customer_longitude?: number | string | null;
+  delivery_address?: any;
+  profiles?: {
     full_name: string;
     phone_number: string;
-  };
+  } | null;
+  order_items?: Array<{
+    id: string;
+    quantity: number;
+    price: number;
+    products?: {
+      name_ar?: string;
+      name?: string;
+    };
+  }>;
 }
 
 const ORDER_STATUSES = [
@@ -32,33 +52,108 @@ export default function MerchantOrders() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('all');
+  const { activeStore, stores, isAllStoresSelected } = useActiveStore();
+  const fetchingRef = React.useRef(false);
 
   useEffect(() => {
     fetchOrders();
-  }, []);
+  }, [activeStore, isAllStoresSelected]);
+
+  // إعادة تحميل الطلبات عند العودة للصفحة (مهم لعرض الطلبات الجديدة)
+  useFocusEffect(
+    useCallback(() => {
+      console.log('👩‍💼 [Merchant] Orders screen focused - refreshing orders...');
+      fetchOrders();
+    }, [activeStore, isAllStoresSelected])
+  );
 
   const fetchOrders = async () => {
     try {
+      if (fetchingRef.current) {
+        return;
+      }
+      fetchingRef.current = true;
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        console.log('❌ [Merchant] No user - cannot fetch orders');
+        return;
+      }
 
-      const { data, error } = await supabase
+      console.log('🔍 [Merchant] Fetching orders for merchant:', user.id);
+
+      // جلب المتاجر التي يملكها التاجر
+      const { data: merchantStores, error: storesError } = await supabase
+        .from('merchants')
+        .select('id')
+        .eq('owner_id', user.id);
+
+      if (storesError) {
+        console.error('❌ [Merchant] Error fetching stores:', storesError);
+        throw storesError;
+      }
+
+      if (!merchantStores || merchantStores.length === 0) {
+        console.log('⚠️ [Merchant] No stores found for this merchant');
+        setOrders([]);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      const storeIds = merchantStores.map(s => s.id);
+      console.log('🏪 [Merchant] Store IDs:', storeIds);
+
+      // جلب الطلبات من جميع متاجر التاجر
+      let query = supabase
         .from('orders')
         .select(`
-          *,
-          profiles!orders_customer_id_fkey(full_name, phone_number)
+          id,
+          order_number,
+          customer_id,
+          status,
+          total,
+          product_total,
+          delivery_fee,
+          service_fee,
+          tax_amount,
+          customer_total,
+          created_at,
+          customer_latitude,
+          customer_longitude,
+          profiles:profiles!orders_customer_id_fkey(full_name, phone_number),
+          order_items(
+            id,
+            quantity,
+            price,
+            products(name)
+          )
         `)
-        .eq('merchant_id', user.id)
+        .in('merchant_id', storeIds)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      setOrders(data || []);
+      // ✅ تنفيذ الاستعلام مباشرة
+      const { data: ordersData, error: ordersError } = await query;
+
+      if (ordersError) {
+        console.error('❌ [Merchant] Error fetching orders:', ordersError);
+        throw ordersError;
+      }
+
+      
+      console.log(`✅ [Merchant] Fetched ${ordersData?.length || 0} orders`);
+      // ✅ بعض نسخ Supabase قد تُرجع العلاقة كـ Array بدلاً من Object
+      const normalizedOrders: Order[] = (ordersData || []).map((o: any) => ({
+        ...o,
+        profiles: Array.isArray(o?.profiles) ? (o.profiles[0] || null) : (o?.profiles ?? null),
+      }));
+      setOrders(normalizedOrders);
     } catch (error: any) {
       console.error('Error fetching orders:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء تحميل الطلبات');
     } finally {
       setLoading(false);
       setRefreshing(false);
+      fetchingRef.current = false;
     }
   };
 
@@ -101,7 +196,7 @@ export default function MerchantOrders() {
     <View key={order.id} style={styles.orderCard}>
       <View style={styles.orderHeader}>
         <View>
-          <Text style={styles.orderNumber}>طلب #{order.id.substring(0, 8)}</Text>
+          <Text style={styles.orderNumber}>#{order.order_number || order.id.substring(0, 8)}</Text>
           <Text style={styles.customerName}>{order.profiles?.full_name || 'عميل'}</Text>
         </View>
         <View style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) + '20' }]}>
@@ -113,8 +208,18 @@ export default function MerchantOrders() {
 
       <View style={styles.orderDetails}>
         <View style={styles.orderRow}>
-          <Text style={styles.orderLabel}>المبلغ:</Text>
-          <Text style={styles.orderValue}>{order.total_amount} ريال</Text>
+          <Text style={styles.orderLabel}>مستحقات المتجر:</Text>
+          <Text style={styles.orderValue}>
+            {(
+              ((order.product_total ?? 0) + (order.tax_amount ?? 0)) || 0
+            ).toFixed(2)} جنيه
+          </Text>
+        </View>
+        <View style={styles.orderRow}>
+          <Text style={styles.orderLabel}>إجمالي العميل:</Text>
+          <Text style={styles.orderValue}>
+            {(order.customer_total ?? order.total ?? 0).toFixed(2)} جنيه
+          </Text>
         </View>
         <View style={styles.orderRow}>
           <Text style={styles.orderLabel}>التاريخ:</Text>
@@ -122,6 +227,35 @@ export default function MerchantOrders() {
             {new Date(order.created_at).toLocaleDateString('ar-EG')}
           </Text>
         </View>
+        <View style={styles.orderRow}>
+          <Text style={styles.orderLabel}>📞 الهاتف:</Text>
+          <Text style={styles.orderValue}>{order.profiles?.phone_number || 'غير متاح'}</Text>
+        </View>
+        {(order.delivery_address || (order.customer_latitude && order.customer_longitude)) && (
+          <View style={styles.orderRow}>
+            <Text style={styles.orderLabel}>📍 العنوان:</Text>
+            <Text style={styles.orderValue}>
+              {order.customer_latitude && order.customer_longitude
+                ? `موقع محدد: ${Number(order.customer_latitude).toFixed(4)}, ${Number(order.customer_longitude).toFixed(4)}`
+                : (typeof order.delivery_address === 'string' 
+                  ? order.delivery_address 
+                  : order.delivery_address?.street_address || '—')}
+            </Text>
+          </View>
+        )}
+        {/* ✅ عرض المنتجات */}
+        {order.order_items && order.order_items.length > 0 && (
+          <View style={styles.orderRow}>
+            <Text style={styles.orderLabel}>📦 المنتجات:</Text>
+            <View style={{ flex: 1 }}>
+              {order.order_items.map((item: any, index: number) => (
+                <Text key={item.id} style={styles.orderValue}>
+                  {item.products?.name || 'منتج'} ({item.quantity}×)
+                </Text>
+              ))}
+            </View>
+          </View>
+        )}
       </View>
 
       {order.status === 'pending' && (
@@ -169,6 +303,7 @@ export default function MerchantOrders() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>الطلبات ({filteredOrders.length})</Text>
+        <StoreButton />
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.statusFilter}>
@@ -212,7 +347,7 @@ export default function MerchantOrders() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  header: { padding: spacing.lg, backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.border },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.lg, backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.border },
   headerTitle: { ...typography.h2, color: colors.text },
   statusFilter: {
     backgroundColor: colors.white,
