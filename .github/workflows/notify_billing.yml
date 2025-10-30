@@ -8,10 +8,12 @@ on:
 jobs:
   call-function:
     runs-on: ubuntu-latest
+    env:
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
       - name: Call edge function
         run: |
           curl -X POST "https://jhngtyyqiqhgnuclduhc.supabase.co/functions/v1/notify_billing" \
             -H "Content-Type: application/json" \
-            -H "x-cron-key: ${{ secrets.CRON_SECRET }}" \
+            -H "x-cron-key: ${CRON_SECRET}" \
             -d '{}'

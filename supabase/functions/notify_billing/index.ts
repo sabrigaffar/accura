@@ -15,6 +15,13 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 serve(async (req: Request) => {
   try {
+    // Optional: secure the endpoint when called by schedulers (GitHub Actions, etc.)
+    const CRON_SECRET = Deno.env.get('CRON_SECRET');
+    const reqSecret = req.headers.get('x-cron-key');
+    if (CRON_SECRET && reqSecret !== CRON_SECRET) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
     // 1) Fetch merchants upcoming notifications
     const { data: merchants, error: mErr } = await supabase.rpc('list_upcoming_billing_notifications');
     if (mErr) console.error('list_upcoming_billing_notifications error', mErr);
@@ -25,32 +32,41 @@ serve(async (req: Request) => {
 
     // 3) Resolve driver push tokens
     const driverIds = (drivers ?? []).map((d: any) => d.driver_id);
-    let driverPushMap: Record<string, string> = {};
+    // store token and last_notification_at to apply cooldown
+    let driverPushMap: Record<string, { token: string; last_notification_at: string | null }> = {};
     if (driverIds.length > 0) {
       const { data: dp, error: dpErr } = await supabase
         .from('driver_profiles')
-        .select('id, push_token, push_enabled')
+        .select('id, push_token, push_enabled, last_notification_at')
         .in('id', driverIds);
       if (dpErr) console.error('driver_profiles push lookup error', dpErr);
       (dp ?? []).forEach((row: any) => {
-        if (row.push_enabled && row.push_token) driverPushMap[row.id] = row.push_token;
+        if (row.push_enabled && row.push_token) {
+          driverPushMap[row.id] = { token: row.push_token, last_notification_at: row.last_notification_at ?? null };
+        }
       });
     }
 
     // 4) Build messages
     const expoMessages: any[] = [];
+    const notifiedDriverIds: string[] = [];
 
     // Drivers: low balance
     for (const d of drivers ?? []) {
-      const token = driverPushMap[d.driver_id];
-      if (!token) continue;
+      const entry = driverPushMap[d.driver_id];
+      if (!entry) continue;
+      // cooldown: skip drivers notified in the last 12 hours
+      const cutoffMs = 12 * 60 * 60 * 1000; // 12h
+      const lastAt = entry.last_notification_at ? new Date(entry.last_notification_at).getTime() : 0;
+      if (lastAt && Date.now() - lastAt < cutoffMs) continue;
       expoMessages.push({
-        to: token,
+        to: entry.token,
         sound: 'default',
         title: 'تنبيه: رصيد المحفظة منخفض',
         body: 'لن تستطيع قبول الطلبات إذا كان رصيدك أقل من 50 جنيه. يرجى شحن محفظتك للاستمرار.',
         data: { type: 'driver_low_balance', balance: d.balance },
       });
+      notifiedDriverIds.push(d.driver_id);
     }
 
     // Merchants: upcoming billing/trial
@@ -129,6 +145,15 @@ serve(async (req: Request) => {
       } else {
         sent += batch.length;
       }
+    }
+
+    // 6) Update last_notification_at for drivers that were notified now
+    if (notifiedDriverIds.length > 0) {
+      const { error: updErr } = await supabase
+        .from('driver_profiles')
+        .update({ last_notification_at: new Date().toISOString() })
+        .in('id', notifiedDriverIds);
+      if (updErr) console.error('update last_notification_at error', updErr);
     }
 
     return new Response(JSON.stringify({ ok: true, drivers_notified: sent, merchants_checked: (merchants ?? []).length }), {
