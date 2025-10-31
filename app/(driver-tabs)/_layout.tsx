@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Map, Package, TrendingUp, Star, User } from 'lucide-react-native';
+import { Map, Package, TrendingUp, Star, User, Bell } from 'lucide-react-native';
 import { colors } from '@/constants/theme';
 
 export default function DriverTabsLayout() {
@@ -44,6 +44,13 @@ export default function DriverTabsLayout() {
         options={{
           title: 'تقييماتي',
           tabBarIcon: ({ color, size }) => <Star size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'الإشعارات',
+          tabBarIcon: ({ color, size }) => <Bell size={size} color={color} />,
         }}
       />
       <Tabs.Screen

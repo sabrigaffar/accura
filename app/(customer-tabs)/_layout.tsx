@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Home, ShoppingBag, Package, User } from 'lucide-react-native';
+import { Home, ShoppingBag, Package, User, Bell } from 'lucide-react-native';
 import { colors } from '@/constants/theme';
 
 export default function CustomerTabsLayout() {
@@ -37,6 +37,13 @@ export default function CustomerTabsLayout() {
         options={{
           title: 'طلباتي',
           tabBarIcon: ({ color, size }) => <Package size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'الإشعارات',
+          tabBarIcon: ({ color, size }) => <Bell size={size} color={color} />,
         }}
       />
       <Tabs.Screen

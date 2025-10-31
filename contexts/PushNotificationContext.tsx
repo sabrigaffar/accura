@@ -32,7 +32,7 @@ interface PushNotificationProviderProps {
 }
 
 export function PushNotificationProvider({ children }: PushNotificationProviderProps) {
-  const { user } = useAuth();
+  const { user, userType } = useAuth();
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [notification, setNotification] = useState<Notifications.Notification | null>(null);
   const notificationListener = useRef<any>(null);
@@ -140,17 +140,22 @@ export function PushNotificationProvider({ children }: PushNotificationProviderP
 
   const savePushTokenToDatabase = async (token: string) => {
     try {
-      const { error } = await supabase
-        .from('driver_profiles')
-        .update({ 
-          push_token: token,
-          push_enabled: true,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', user?.id);
+      if (userType === 'driver' && user?.id) {
+        const { error } = await supabase
+          .from('driver_profiles')
+          .update({ 
+            push_token: token,
+            push_enabled: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', user?.id);
 
-      if (error) throw error;
-      console.log('✅ Push token saved to database');
+        if (error) throw error;
+        console.log('✅ Push token saved to database (driver_profiles)');
+      } else {
+        // الأدوار الأخرى تُسجَّل في push_tokens عبر NotificationContext/notificationService
+        console.log('ℹ️ Skipping driver_profiles push_token save for non-driver role');
+      }
     } catch (error) {
       console.error('❌ Failed to save push token:', error);
     }

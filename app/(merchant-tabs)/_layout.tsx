@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { LayoutDashboard, Package, ShoppingCart, TrendingUp, Star, User } from 'lucide-react-native';
+import { LayoutDashboard, Package, ShoppingCart, TrendingUp, Star, User, Bell } from 'lucide-react-native';
 import { colors } from '@/constants/theme';
 import { ActiveStoreProvider } from '@/contexts/ActiveStoreContext';
 
@@ -54,6 +54,13 @@ export default function MerchantTabsLayout() {
           options={{
             title: 'التقييمات',
             tabBarIcon: ({ color, size }) => <Star size={size} color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="notifications"
+          options={{
+            title: 'الإشعارات',
+            tabBarIcon: ({ color, size }) => <Bell size={size} color={color} />,
           }}
         />
         <Tabs.Screen
