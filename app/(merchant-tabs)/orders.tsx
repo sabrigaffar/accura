@@ -7,6 +7,8 @@ import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useActiveStore } from '@/contexts/ActiveStoreContext';
 import { StoreButton } from '@/components/StoreSelector';
+import { useMerchantRealtimeOrders } from '@/hooks/useRealtimeOrders';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Order {
   id: string;
@@ -19,6 +21,7 @@ interface Order {
   service_fee?: number | null;
   tax_amount?: number | null;
   customer_total?: number | null;
+  merchant_amount?: number | null; // مستحقات المتجر
   created_at: string;
   customer_latitude?: number | string | null;
   customer_longitude?: number | string | null;
@@ -48,12 +51,34 @@ const ORDER_STATUSES = [
 ];
 
 export default function MerchantOrders() {
+  const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('all');
   const { activeStore, stores, isAllStoresSelected } = useActiveStore();
   const fetchingRef = React.useRef(false);
+
+  // Real-time subscriptions للطلبات
+  const merchantIds = React.useMemo(() => stores.map(s => s.id), [stores]);
+  useMerchantRealtimeOrders(
+    user?.id || '',
+    merchantIds,
+    (event, order) => {
+      console.log('🏪 [Merchant] Order event:', event, order);
+      if (event === 'INSERT') {
+        Alert.alert(
+          '🔔 طلب جديد!',
+          `طلب جديد #${order.order_number} بقيمة ${order.customer_total || order.total} جنيه`,
+          [
+            { text: 'حسناً', onPress: () => fetchOrders() }
+          ]
+        );
+      } else if (event === 'UPDATE') {
+        fetchOrders();
+      }
+    }
+  );
 
   useEffect(() => {
     fetchOrders();
@@ -210,9 +235,22 @@ export default function MerchantOrders() {
         <View style={styles.orderRow}>
           <Text style={styles.orderLabel}>مستحقات المتجر:</Text>
           <Text style={styles.orderValue}>
-            {(
-              ((order.product_total ?? 0) + (order.tax_amount ?? 0)) || 0
-            ).toFixed(2)} جنيه
+            {(() => {
+              // إذا كان merchant_amount موجود استخدمه
+              if (order.merchant_amount != null && order.merchant_amount > 0) {
+                return order.merchant_amount.toFixed(2);
+              }
+              // إذا كان product_total موجود
+              if (order.product_total != null && order.product_total > 0) {
+                return ((order.product_total ?? 0) + (order.tax_amount ?? 0)).toFixed(2);
+              }
+              // احسب من customer_total بخصم الرسوم
+              const customerTotal = order.customer_total ?? order.total ?? 0;
+              const deliveryFee = order.delivery_fee ?? 0;
+              const serviceFee = order.service_fee ?? 0;
+              const merchantEarnings = customerTotal - deliveryFee - serviceFee;
+              return Math.max(0, merchantEarnings).toFixed(2);
+            })()} جنيه
           </Text>
         </View>
         <View style={styles.orderRow}>

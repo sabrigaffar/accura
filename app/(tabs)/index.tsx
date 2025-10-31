@@ -10,12 +10,14 @@ import {
   FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
 import { MapPin, Search, UtensilsCrossed, ShoppingCart, Pill, Gift, Grid3x3, Store } from 'lucide-react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { Merchant } from '@/types/database';
 import { router } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useLocation } from '@/hooks/useLocation';
 
 const CATEGORIES = [
   { id: 'restaurant', name: 'مطاعم', icon: UtensilsCrossed, color: '#FF6B6B' },
@@ -32,8 +34,41 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [locationText, setLocationText] = useState('جارٍ تحديد الموقع...');
 
   const styles = useMemo(() => createStyles(theme), [theme]);
+  
+  // Hook الموقع
+  const { location, getCurrentLocation, loading: locationLoading } = useLocation();
+
+  // تحديد الموقع عند تحميل الصفحة
+  useEffect(() => {
+    (async () => {
+      const loc = await getCurrentLocation();
+      if (loc) {
+        // الحصول على اسم المنطقة من الإحداثيات
+        try {
+          const address = await Location.reverseGeocodeAsync({
+            latitude: loc.latitude,
+            longitude: loc.longitude
+          });
+          
+          if (address && address[0]) {
+            const { city, district, street } = address[0];
+            const locationStr = `${city || ''}${district ? '، ' + district : ''}${street ? '، ' + street : ''}`;
+            setLocationText(locationStr || 'الموقع الحالي');
+          } else {
+            setLocationText('الموقع الحالي');
+          }
+        } catch (err) {
+          console.error('Error getting address:', err);
+          setLocationText('الموقع الحالي');
+        }
+      } else {
+        setLocationText('الرياض، حي النخيل'); // fallback
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     fetchMerchants();
@@ -103,13 +138,15 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <View style={styles.locationBar}>
+        <TouchableOpacity style={styles.locationBar} onPress={getCurrentLocation}>
           <MapPin size={20} color={theme.primary} />
           <View style={styles.locationText}>
             <Text style={styles.locationLabel}>التوصيل إلى</Text>
-            <Text style={styles.locationValue}>الرياض، حي النخيل</Text>
+            <Text style={styles.locationValue} numberOfLines={1}>
+              {locationLoading ? 'جارٍ تحديد الموقع...' : locationText}
+            </Text>
           </View>
-        </View>
+        </TouchableOpacity>
 
         <View style={styles.searchBarContainer}>
           <View style={styles.searchBar}>

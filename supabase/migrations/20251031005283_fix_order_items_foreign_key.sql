@@ -7,11 +7,27 @@ ALTER TABLE order_items
 DROP CONSTRAINT IF EXISTS order_items_product_id_fkey;
 
 -- 2. إضافة Foreign Key الجديد الصحيح
-ALTER TABLE order_items 
-ADD CONSTRAINT order_items_product_id_fkey 
-FOREIGN KEY (product_id) 
-REFERENCES products(id) 
-ON DELETE SET NULL;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables 
+    WHERE table_schema='public' AND table_name='products'
+  ) THEN
+    -- If a unified products table exists, reference it
+    ALTER TABLE order_items 
+    ADD CONSTRAINT order_items_product_id_fkey 
+    FOREIGN KEY (product_id) 
+    REFERENCES products(id) 
+    ON DELETE SET NULL;
+  ELSE
+    -- Otherwise, keep referencing merchant_products (legacy schema)
+    ALTER TABLE order_items 
+    ADD CONSTRAINT order_items_product_id_fkey 
+    FOREIGN KEY (product_id) 
+    REFERENCES merchant_products(id) 
+    ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- 3. التحقق من النجاح
 SELECT 

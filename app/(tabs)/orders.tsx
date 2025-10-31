@@ -6,6 +6,7 @@ import {
   FlatList,
   TouchableOpacity,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -16,6 +17,7 @@ import { Order } from '@/types/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useCustomerRealtimeOrders } from '@/hooks/useRealtimeOrders';
 
 interface OrderWithMerchant extends Order {
   merchant?: {
@@ -54,6 +56,20 @@ export default function OrdersScreen() {
     delivered: { label: 'تم التوصيل', color: theme.success, icon: CheckCircle },
     cancelled: { label: 'ملغي', color: theme.error, icon: XCircle },
   }), [theme]);
+
+  // Real-time subscriptions للطلبات
+  useCustomerRealtimeOrders(
+    user?.id || '',
+    (updatedOrder) => {
+      console.log('👤 [Customer] Order status changed:', updatedOrder.status);
+      Alert.alert(
+        '📦 تحديث الطلب',
+        `تم تحديث حالة طلبك #${updatedOrder.order_number}`,
+        [{ text: 'حسناً', onPress: () => fetchOrders() }]
+      );
+      fetchOrders();
+    }
+  );
 
   useEffect(() => {
     if (user) {

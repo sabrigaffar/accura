@@ -110,6 +110,8 @@ const DashboardLayout = () => {
     { name: 'التقارير', icon: BarChartIcon, path: '/reports' },
     { name: 'اشتراكات المتاجر', icon: BarChartIcon, path: '/subscriptions' },
     { name: 'محفظة المنصة', icon: BarChartIcon, path: '/wallet' },
+    { name: 'العروض', icon: BarChartIcon, path: '/promotions' },
+    { name: 'قواعد العروض', icon: BarChartIcon, path: '/promotion-rules' },
     { name: 'الإعدادات', icon: SettingsIcon, path: '/settings' },
   ];
 

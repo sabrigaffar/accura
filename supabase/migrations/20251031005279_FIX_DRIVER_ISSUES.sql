@@ -5,28 +5,80 @@
 -- 1. إنشاء/إصلاح جدول driver_earnings
 -- ==============================================
 
--- حذف الجدول القديم إن وجد (احتياطي)
-DROP TABLE IF EXISTS driver_earnings CASCADE;
+DO $$
+BEGIN
+  -- أنشئ الجدول إن لم يكن موجوداً
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables 
+    WHERE table_schema='public' AND table_name='driver_earnings'
+  ) THEN
+    CREATE TABLE driver_earnings (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      driver_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
+      earned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  ELSE
+    -- تأكد من وجود عمود amount وإلا أضِفه واملأه من الحقول المتاحة
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_schema='public' AND table_name='driver_earnings' AND column_name='amount'
+    ) THEN
+      ALTER TABLE driver_earnings ADD COLUMN amount DECIMAL(10,2) NOT NULL DEFAULT 0;
 
--- إنشاء الجدول الصحيح
-CREATE TABLE driver_earnings (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  driver_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
-  earned_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema='public' AND table_name='driver_earnings' AND column_name='total_earning'
+      ) THEN
+        UPDATE driver_earnings SET amount = COALESCE(total_earning, 0);
+      ELSIF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema='public' AND table_name='driver_earnings' AND column_name='base_fee'
+      ) THEN
+        UPDATE driver_earnings 
+        SET amount = COALESCE(base_fee,0) + COALESCE(distance_fee,0) + COALESCE(tip_amount,0) + COALESCE(bonus,0);
+      END IF;
+    END IF;
+  END IF;
+END $$;
 
 -- تعليقات
 COMMENT ON TABLE driver_earnings IS 'سجل أرباح السائقين من التوصيلات';
-COMMENT ON COLUMN driver_earnings.amount IS 'مبلغ الأرباح (رسوم التوصيل)';
-COMMENT ON COLUMN driver_earnings.earned_at IS 'وقت تحقيق الأرباح';
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema='public' AND table_name='driver_earnings' AND column_name='amount'
+  ) THEN
+    COMMENT ON COLUMN driver_earnings.amount IS 'مبلغ الأرباح (رسوم التوصيل)';
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema='public' AND table_name='driver_earnings' AND column_name='earned_at'
+  ) THEN
+    COMMENT ON COLUMN driver_earnings.earned_at IS 'وقت تحقيق الأرباح';
+  END IF;
+END $$;
 
 -- Indexes
-CREATE INDEX idx_driver_earnings_driver ON driver_earnings(driver_id, earned_at DESC);
-CREATE INDEX idx_driver_earnings_order ON driver_earnings(order_id);
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema='public' AND table_name='driver_earnings' AND column_name='earned_at'
+  ) THEN
+    CREATE INDEX IF NOT EXISTS idx_driver_earnings_driver ON driver_earnings(driver_id, earned_at DESC);
+  ELSE
+    CREATE INDEX IF NOT EXISTS idx_driver_earnings_driver ON driver_earnings(driver_id);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_driver_earnings_order ON driver_earnings(order_id);
 
 -- RLS Policies
 ALTER TABLE driver_earnings ENABLE ROW LEVEL SECURITY;

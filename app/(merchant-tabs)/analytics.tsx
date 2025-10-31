@@ -74,10 +74,10 @@ export default function MerchantAnalytics() {
 
       const storeIds = merchantStores.map(s => s.id);
 
-      // ✅ جلب الطلبات (استخدم total وليس total_amount)
+      // ✅ جلب الطلبات مع customer_total الصحيح
       const { data: orders } = await supabase
         .from('orders')
-        .select('id, status, total, created_at')
+        .select('id, status, total, customer_total, created_at')
         .in('merchant_id', storeIds);
 
       // ✅ الحالات المكتملة
@@ -87,9 +87,11 @@ export default function MerchantAnalytics() {
         revenueStatuses.includes(o.status)
       ) || [];
 
-      const totalRevenue = completedOrders.reduce((sum, order) => 
-        sum + (parseFloat(order.total?.toString() || '0') || 0), 0
-      );
+      // استخدام customer_total (الأولوية) أو total كبديل احتياطي
+      const totalRevenue = completedOrders.reduce((sum, order) => {
+        const amount = order.customer_total ?? order.total ?? 0;
+        return sum + (parseFloat(amount.toString()) || 0);
+      }, 0);
 
       const averageOrderValue = completedOrders.length > 0 
         ? totalRevenue / completedOrders.length 

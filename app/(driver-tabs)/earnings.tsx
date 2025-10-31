@@ -21,7 +21,9 @@ import { formatCurrency, DEFAULT_CURRENCY, getCurrencyByCode } from '@/constants
 interface Earning {
   id: string;
   order_number: string;
-  amount: number;
+  amount: number; // will hold NET amount for display
+  net_amount?: number;
+  commission_amount?: number;
   earned_at: string;
   customer_name: string;
 }
@@ -98,6 +100,8 @@ export default function DriverEarnings() {
         .select(`
           id,
           amount,
+          net_amount,
+          commission_amount,
           earned_at,
           order:orders!driver_earnings_order_id_fkey (
             order_number,
@@ -115,11 +119,18 @@ export default function DriverEarnings() {
       const processedEarnings: Earning[] = (earningsData || []).map((earning: any) => {
         const order = Array.isArray(earning.order) ? earning.order[0] : earning.order;
         const customer = order?.customer ? (Array.isArray(order.customer) ? order.customer[0] : order.customer) : null;
+        const gross = Number(earning.amount ?? 0);
+        const commission = Number(earning.commission_amount ?? 0);
+        const net = earning.net_amount !== null && earning.net_amount !== undefined
+          ? Number(earning.net_amount)
+          : (gross - commission);
 
         return {
           id: earning.id,
           order_number: order?.order_number || 'غير معروف',
-          amount: earning.amount,
+          amount: net, // display NET amount
+          net_amount: net,
+          commission_amount: commission,
           earned_at: earning.earned_at,
           customer_name: customer?.full_name || 'عميل',
         };
@@ -232,6 +243,18 @@ export default function DriverEarnings() {
         </View>
       </View>
       <Text style={styles.customerName}>{item.customer_name}</Text>
+      {/* Breakdown: gross / commission / net */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+        <Text style={{ color: colors.textLight }}>
+          إجمالي: {formatCurrency((item.net_amount ?? item.amount) + (item.commission_amount ?? 0), currency)}
+        </Text>
+        <Text style={{ color: colors.textLight }}>
+          خصم: {formatCurrency(item.commission_amount ?? 0, currency)}
+        </Text>
+        <Text style={{ color: colors.text }}>
+          صافي: {formatCurrency(item.net_amount ?? item.amount, currency)}
+        </Text>
+      </View>
       <View style={styles.dateRow}>
         <Calendar size={14} color={colors.textLight} />
         <Text style={styles.dateText}>{formatDate(item.earned_at)}</Text>

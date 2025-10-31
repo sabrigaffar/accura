@@ -410,6 +410,27 @@ export default function CheckoutScreen() {
         }
         
         console.log('✅ Order items created successfully');
+
+        // Apply promotions on server (idempotent): updates subtotal/service_fee/discount/total
+        try {
+          const { data: promoData, error: promoError } = await supabase.rpc('apply_promotions_tx', { p_order_id: data.id });
+          if (promoError) {
+            console.warn('⚠️ apply_promotions_tx warning:', promoError);
+          } else {
+            console.log('✅ Promotions applied:', promoData);
+          }
+          // Optional: refetch order to see updated totals
+          const { data: updatedOrder } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('id', data.id)
+            .single();
+          if (updatedOrder) {
+            console.log('🧾 Updated order after promotions:', updatedOrder);
+          }
+        } catch (e) {
+          console.warn('⚠️ Failed to apply promotions:', e);
+        }
       }
 
       // حفظ معلومات الطلب قبل التوجيه

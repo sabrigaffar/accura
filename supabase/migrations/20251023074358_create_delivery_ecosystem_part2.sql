@@ -8,7 +8,8 @@
 
 -- Create enum types for orders
 CREATE TYPE order_status_enum AS ENUM (
-  'pending', 'accepted', 'preparing', 'ready', 
+  'pending', 'accepted', 'preparing', 'ready',
+  'heading_to_merchant', 'heading_to_customer', 'out_for_delivery',
   'picked_up', 'on_the_way', 'delivered', 'cancelled'
 );
 

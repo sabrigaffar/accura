@@ -24,11 +24,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { formatCurrency, DEFAULT_CURRENCY } from '@/constants/currencies';
 import { playNotificationSound } from '@/utils/soundPlayer';
+import { useDriverRealtimeOrders } from '@/hooks/useRealtimeOrders';
 
 interface AvailableOrder {
   id: string;
   order_number: string;
   customer_name: string;
+  customer_phone?: string; // رقم هاتف العميل
   merchant_name: string;
   delivery_address: string;
   total: number;
@@ -39,6 +41,10 @@ interface AvailableOrder {
   distance: number;
   created_at: string;
   items_count: number;
+  items?: Array<{
+    product_name: string;
+    quantity: number;
+  }>; // تفاصيل المنتجات
 }
 
 type SortOption = 'newest' | 'highest_fee' | 'nearest';
@@ -99,6 +105,27 @@ export default function DriverAvailableOrders() {
       return false;
     }
   }
+
+  // Real-time subscriptions للطلبات الجديدة
+  useDriverRealtimeOrders(
+    user?.id || '',
+    (newOrder) => {
+      console.log('🔔 طلب جديد متاح!', newOrder);
+      Alert.alert(
+        '📦 طلب جديد متاح',
+        `طلب #${newOrder.order_number} من ${newOrder.merchant_name}`,
+        [
+          { text: 'إغلاق', style: 'cancel' },
+          { text: 'عرض الطلبات', onPress: () => fetchAvailableOrders() }
+        ]
+      );
+      fetchAvailableOrders();
+    },
+    (updatedOrder) => {
+      console.log('🔄 تحديث طلب نشط', updatedOrder);
+      fetchDailyStats();
+    }
+  );
 
   useEffect(() => {
     fetchAvailableOrders();
@@ -358,12 +385,19 @@ export default function DriverAvailableOrders() {
           customer_latitude,
           customer_longitude,
           customer:profiles!orders_customer_id_fkey (
-            full_name
+            full_name,
+            phone_number
           ),
           merchant:merchants!orders_merchant_id_fkey (
             name_ar,
             latitude,
             longitude
+          ),
+          order_items (
+            quantity,
+            products (
+              name
+            )
           )
         `)
         .eq('status', 'ready')
@@ -381,57 +415,94 @@ export default function DriverAvailableOrders() {
         console.log('[Driver] Sample order:', ordersData[0]);
       }
 
-      // جلب عدد الأصناف لكل طلب
-      const ordersWithItems = await Promise.all(
-        (ordersData || []).map(async (order) => {
-          const { count } = await supabase
-            .from('order_items')
-            .select('*', { count: 'exact', head: true })
-            .eq('order_id', order.id);
+      // معالجة البيانات وإضافة الحقول الجديدة
+      // 1) جهّز خريطة counts عبر RPC آمن يعيد عدد الأصناف للطلبات المسموح بها
+      const orderIds = (ordersData || []).map((o) => o.id);
+      let countsMap: Record<string, number> = {};
+      let summaryMap: Record<string, Array<{ product_name: string; quantity: number }>> = {};
+      if (orderIds.length > 0) {
+        try {
+          const { data: countsData } = await supabase.rpc('get_orders_items_count', { p_order_ids: orderIds });
+          if (Array.isArray(countsData)) {
+            countsData.forEach((row: any) => {
+              if (row && row.order_id) countsMap[row.order_id] = row.items_count ?? 0;
+            });
+          }
+        } catch (e) {
+          console.warn('get_orders_items_count RPC error', e);
+        }
 
-          const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
-          const merchant = Array.isArray(order.merchant) ? order.merchant[0] : order.merchant;
+        // 1.b) ملخص المنتجات قبل القبول (اسم + كمية فقط) بلا أسعار
+        try {
+          const { data: summaryData } = await supabase.rpc('get_orders_items_summary', { p_order_ids: orderIds, p_limit: 3 });
+          if (Array.isArray(summaryData)) {
+            summaryData.forEach((row: any) => {
+              if (!row || !row.order_id) return;
+              if (!summaryMap[row.order_id]) summaryMap[row.order_id] = [];
+              summaryMap[row.order_id].push({ product_name: row.product_name, quantity: row.quantity });
+            });
+          }
+        } catch (e) {
+          console.warn('get_orders_items_summary RPC error', e);
+        }
+      }
 
-          // ✅ استخدام موقع العميل التلقائي
-          const customerLat = order.customer_latitude;
-          const customerLng = order.customer_longitude;
-          const merchantLat = merchant?.latitude;
-          const merchantLng = merchant?.longitude;
+      const ordersWithItems = (ordersData || []).map((order) => {
+        const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
+        const merchant = Array.isArray(order.merchant) ? order.merchant[0] : order.merchant;
+        const orderItems = order.order_items || [];
 
-          return {
-            id: order.id,
-            order_number: order.order_number,
-            customer_name: customer?.full_name || 'عميل',
-            merchant_name: merchant?.name_ar || 'متجر',
-            delivery_address: customerLat && customerLng
-              ? `موقع محدد: ${customerLat.toFixed(4)}, ${customerLng.toFixed(4)}`
-              : 'غير محدد',
-            total: order.total,
-            delivery_fee: order.delivery_fee || 0,
-            estimated_delivery_time: order.estimated_delivery_time || 30,
-            dest_lat: customerLat ? parseFloat(customerLat) : undefined,
-            dest_lng: customerLng ? parseFloat(customerLng) : undefined,
-            distance:
-              driverLocation && customerLat && customerLng
-                ? calculateDistance(
-                    driverLocation.latitude,
-                    driverLocation.longitude,
-                    parseFloat(customerLat),
-                    parseFloat(customerLng)
-                  )
-                : merchantLat && merchantLng && customerLat && customerLng
-                ? calculateDistance(
-                    parseFloat(merchantLat),
-                    parseFloat(merchantLng),
-                    parseFloat(customerLat),
-                    parseFloat(customerLng)
-                  )
-                : Math.floor(Math.random() * 5) + 1, // fallback
-            created_at: order.created_at,
-            items_count: count || 0,
-          };
-        })
-      );
+        // ✅ استخدام موقع العميل التلقائي
+        const customerLat = order.customer_latitude;
+        const customerLng = order.customer_longitude;
+        const merchantLat = merchant?.latitude;
+        const merchantLng = merchant?.longitude;
+
+        // تحويل order_items إلى الشكل المطلوب
+        // إن كانت سياسة RLS تمنع جلب تفاصيل المنتجات، نستخدم ملخص RPC
+        const itemsFromJoin = orderItems.map((item: any) => ({
+          product_name: item.products?.name_ar || item.products?.name || 'منتج',
+          quantity: item.quantity || 1,
+        }));
+        const items = (summaryMap[order.id] && summaryMap[order.id].length > 0)
+          ? summaryMap[order.id]
+          : itemsFromJoin;
+
+        return {
+          id: order.id,
+          order_number: order.order_number,
+          customer_name: customer?.full_name || 'عميل',
+          customer_phone: customer?.phone_number, // ✅ رقم الهاتف
+          merchant_name: merchant?.name_ar || 'متجر',
+          delivery_address: customerLat && customerLng
+            ? `موقع محدد: ${customerLat.toFixed(4)}, ${customerLng.toFixed(4)}`
+            : 'غير محدد',
+          total: order.total,
+          delivery_fee: order.delivery_fee || 0,
+          estimated_delivery_time: order.estimated_delivery_time || 30,
+          dest_lat: customerLat ? parseFloat(customerLat) : undefined,
+          dest_lng: customerLng ? parseFloat(customerLng) : undefined,
+          distance:
+            driverLocation && customerLat && customerLng
+              ? calculateDistance(
+                  driverLocation.latitude,
+                  driverLocation.longitude,
+                  parseFloat(customerLat),
+                  parseFloat(customerLng)
+                )
+              : merchantLat && merchantLng && customerLat && customerLng
+              ? calculateDistance(
+                  parseFloat(merchantLat),
+                  parseFloat(merchantLng),
+                  parseFloat(customerLat),
+                  parseFloat(customerLng)
+                )
+              : Math.floor(Math.random() * 5) + 1, // fallback
+          created_at: order.created_at,
+          items_count: countsMap[order.id] ?? (items.length || 0),
+          items, // ✅ تفاصيل المنتجات
+        };
+      });
 
       // تشغيل صوت تنبيه عند وجود طلبات جديدة
       if (ordersWithItems.length > orders.length && orders.length > 0) {
@@ -594,74 +665,140 @@ export default function DriverAvailableOrders() {
     );
   };
 
-  const renderOrderCard = ({ item }: { item: AvailableOrder }) => (
-    <View style={styles.orderCard}>
-      {/* Enhanced Header with Badge */}
-      <View style={styles.orderHeader}>
-        <View style={styles.orderNumberBadge}>
-          <Package size={18} color={colors.white} />
-          <Text style={styles.orderNumber}>#{item.order_number}</Text>
-        </View>
-        <View style={styles.deliveryFeeBadge}>
-          <DollarSign size={18} color={colors.white} />
-          <Text style={styles.deliveryFeeText}>{formatCurrency(item.delivery_fee, currency)}</Text>
-        </View>
-      </View>
+  const renderOrderCard = ({ item }: { item: AvailableOrder }) => {
+    // حساب الوقت منذ إنشاء الطلب
+    const getTimeAgo = (dateString: string) => {
+      const now = new Date();
+      const created = new Date(dateString);
+      const diffMs = now.getTime() - created.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      
+      if (diffMins < 1) return 'الآن';
+      if (diffMins < 60) return `منذ ${diffMins} دقيقة`;
+      const diffHours = Math.floor(diffMins / 60);
+      return `منذ ${diffHours} ساعة`;
+    };
 
-      <View style={styles.orderInfo}>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>المتجر:</Text>
-          <Text style={styles.infoValue}>{item.merchant_name}</Text>
+    return (
+      <View style={styles.orderCard}>
+        {/* Enhanced Header with Badge */}
+        <View style={styles.orderHeader}>
+          <View style={styles.orderNumberBadge}>
+            <Package size={18} color={colors.white} />
+            <Text style={styles.orderNumber}>#{item.order_number}</Text>
+          </View>
+          <View style={styles.deliveryFeeBadge}>
+            <DollarSign size={18} color={colors.white} />
+            <Text style={styles.deliveryFeeText}>{formatCurrency(item.delivery_fee, currency)}</Text>
+          </View>
         </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>العميل:</Text>
-          <Text style={styles.infoValue}>{item.customer_name}</Text>
-        </View>
-        <View style={styles.infoRow}>
-          <MapPin size={14} color={colors.textLight} />
-          <Text style={styles.addressText} numberOfLines={1}>
-            {item.delivery_address}
-          </Text>
-        </View>
-      </View>
 
-      <View style={styles.orderDetails}>
-        <View style={styles.detailItem}>
-          <Clock size={16} color={colors.textLight} />
-          <Text style={styles.detailText}>{item.estimated_delivery_time} دقيقة</Text>
+        {/* ✅ وقت الطلب */}
+        <View style={styles.timeAgoContainer}>
+          <Clock size={14} color={colors.textLight} />
+          <Text style={styles.timeAgoText}>{getTimeAgo(item.created_at)}</Text>
         </View>
-        <View style={styles.detailItem}>
-          <Map size={16} color={colors.textLight} />
-          <Text style={styles.detailText}>{item.distance} كم</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Package size={16} color={colors.textLight} />
-          <Text style={styles.detailText}>{item.items_count} صنف</Text>
-        </View>
-      </View>
 
-      <View style={styles.orderFooter}>
-        <View style={styles.totalSection}>
-          <Text style={styles.totalLabel}>إجمالي الطلب:</Text>
-          <Text style={styles.totalAmount}>{formatCurrency(item.total, currency)}</Text>
-        </View>
-        <TouchableOpacity
-          style={[
-            styles.acceptButton,
-            accepting === item.id && styles.acceptButtonDisabled,
-          ]}
-          onPress={() => handleAcceptOrder(item.id)}
-          disabled={accepting === item.id}
-        >
-          {accepting === item.id ? (
-            <ActivityIndicator color={colors.white} size="small" />
-          ) : (
-            <Text style={styles.acceptButtonText}>قبول الطلب</Text>
+        <View style={styles.orderInfo}>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>المتجر:</Text>
+            <Text style={styles.infoValue}>{item.merchant_name}</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>العميل:</Text>
+            <Text style={styles.infoValue}>{item.customer_name}</Text>
+          </View>
+          {/* ✅ رقم الهاتف */}
+          {item.customer_phone && (
+            <TouchableOpacity 
+              style={styles.infoRow}
+              onPress={() => {
+                const phoneUrl = `tel:${item.customer_phone}`;
+                Linking.openURL(phoneUrl).catch(() => 
+                  Alert.alert('خطأ', 'تعذر فتح تطبيق الاتصال')
+                );
+              }}
+            >
+              <Text style={styles.infoLabel}>📞 الهاتف:</Text>
+              <Text style={[styles.infoValue, styles.phoneNumber]}>{item.customer_phone}</Text>
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
+          <View style={styles.infoRow}>
+            <MapPin size={14} color={colors.textLight} />
+            <Text style={styles.addressText} numberOfLines={1}>
+              {item.delivery_address}
+            </Text>
+          </View>
+        </View>
+
+        {/* ✅ تفاصيل المنتجات */}
+        {item.items && item.items.length > 0 ? (
+          <View style={styles.productsContainer}>
+            <Text style={styles.productsTitle}>📦 المنتجات:</Text>
+            <View style={styles.productsList}>
+              {item.items.slice(0, 3).map((product, index) => (
+                <Text key={index} style={styles.productItem}>
+                  • {product.product_name} (x{product.quantity})
+                </Text>
+              ))}
+              {item.items.length > 3 && (
+                <Text style={styles.moreProducts}>
+                  +{item.items.length - 3} منتجات أخرى
+                </Text>
+              )}
+            </View>
+          </View>
+        ) : (
+          <View style={styles.productsContainer}>
+            <Text style={styles.productsTitle}>📦 المنتجات:</Text>
+            <Text style={styles.moreProducts}>ستظهر تفاصيل المنتجات بعد قبول الطلب</Text>
+          </View>
+        )}
+
+        <View style={styles.orderDetails}>
+          <View style={styles.detailItem}>
+            <Clock size={16} color={colors.textLight} />
+            <Text style={styles.detailText}>{item.estimated_delivery_time} دقيقة</Text>
+          </View>
+          <View style={styles.detailItem}>
+            <Map size={16} color={colors.textLight} />
+            <Text style={styles.detailText}>{item.distance} كم</Text>
+          </View>
+          <View style={styles.detailItem}>
+            <Package size={16} color={colors.textLight} />
+            <Text style={styles.detailText}>{item.items_count} صنف</Text>
+          </View>
+        </View>
+
+          <View style={styles.orderFooter}>
+          <View style={styles.totalSection}>
+            <View>
+              <Text style={styles.totalLabel}>إجمالي الطلب:</Text>
+              <Text style={styles.totalAmount}>{formatCurrency(item.total, currency)}</Text>
+            </View>
+            <View style={styles.earningsInfo}>
+              <Text style={styles.earningsLabel}>أرباحك:</Text>
+              <Text style={styles.earningsAmount}>{formatCurrency(item.delivery_fee, currency)}</Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={[
+              styles.acceptButton,
+              accepting === item.id && styles.acceptButtonDisabled,
+            ]}
+            onPress={() => handleAcceptOrder(item.id)}
+            disabled={accepting === item.id}
+          >
+            {accepting === item.id ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.acceptButtonText}>قبول الطلب</Text>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
-  );
+    );
+  };  
 
   if (loading) {
     return (
@@ -1440,5 +1577,60 @@ const createStyles = (colors: any) => StyleSheet.create({
   },
   sortButtonTextActive: {
     color: colors.white,
+  },
+  // ✅ أنماط جديدة لبطاقة الطلب المحسّنة
+  timeAgoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.xs,
+  },
+  timeAgoText: {
+    ...typography.caption,
+    color: colors.textLight,
+    fontStyle: 'italic',
+  },
+  phoneNumber: {
+    color: colors.primary,
+    textDecorationLine: 'underline',
+  },
+  productsContainer: {
+    backgroundColor: colors.lightGray,
+    padding: spacing.md,
+    borderRadius: borderRadius.md,
+    marginBottom: spacing.md,
+  },
+  productsTitle: {
+    ...typography.bodyMedium,
+    color: colors.text,
+    fontWeight: '600',
+    marginBottom: spacing.xs,
+  },
+  productsList: {
+    gap: spacing.xs,
+  },
+  productItem: {
+    ...typography.caption,
+    color: colors.text,
+    lineHeight: 20,
+  },
+  moreProducts: {
+    ...typography.caption,
+    color: colors.textLight,
+    fontStyle: 'italic',
+    marginTop: spacing.xs,
+  },
+  earningsInfo: {
+    alignItems: 'flex-end',
+  },
+  earningsLabel: {
+    ...typography.caption,
+    color: colors.textLight,
+  },
+  earningsAmount: {
+    ...typography.h3,
+    color: colors.success,
+    fontWeight: '700',
   },
 });

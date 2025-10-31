@@ -127,7 +127,7 @@ BEGIN
   SELECT latitude, longitude 
   INTO merchant_lat, merchant_lon
   FROM merchants m
-  WHERE m.id = NEW.store_id;
+  WHERE m.id = NEW.merchant_id;
   
   -- إذا كان الموقع متوفر للمتجر والعميل
   IF merchant_lat IS NOT NULL AND merchant_lon IS NOT NULL AND
@@ -180,6 +180,6 @@ SELECT
     ELSE NULL
   END as distance_text
 FROM orders o
-LEFT JOIN merchants m ON o.store_id = m.id;
+LEFT JOIN merchants m ON o.merchant_id = m.id;
 
 COMMENT ON VIEW orders_with_delivery_info IS 'عرض الطلبات مع معلومات التوصيل المفصلة - Orders view with detailed delivery information';

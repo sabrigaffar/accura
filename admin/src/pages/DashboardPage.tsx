@@ -15,7 +15,6 @@ import {
   Line
 } from 'recharts';
 import { useDashboardStats, useDashboardCharts } from '../hooks/useSupabaseData';
-import { PERMISSIONS, usePermissions } from '../contexts/PermissionsContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import SystemHealth from '../components/SystemHealth';
 
@@ -31,13 +30,13 @@ const DashboardPage = () => {
   const [timeRange, setTimeRange] = useState('monthly');
   const { stats, loading, error, refresh } = useDashboardStats();
   const { statsData: statsDataReal, userTypesData: userTypesDataReal, ordersGrowthData: ordersGrowthDataReal, loading: chartsLoading, error: chartsError, refresh: refreshCharts } = useDashboardCharts(timeRange as any);
-  const { hasPermission } = usePermissions();
   const { t } = useLanguage();
 
   const statsDataToShow = (statsDataReal && statsDataReal.length > 0) ? statsDataReal : statsData;
   const userTypesDataToShow = (userTypesDataReal && userTypesDataReal.length > 0) ? userTypesDataReal : userTypesData;
   const ordersGrowthDataToShow = (ordersGrowthDataReal && ordersGrowthDataReal.length > 0) ? ordersGrowthDataReal : ordersGrowthData;
 
+  const CURRENCY_LABEL = 'ج.م';
   if (loading || chartsLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -120,7 +119,7 @@ const DashboardPage = () => {
             </div>
             <div className="mr-4">
               <p className="text-sm font-medium text-gray-600">{t('revenue')}</p>
-              <p className="text-2xl font-semibold text-gray-900">{stats.totalRevenue.toFixed(2)} ر.س</p>
+              <p className="text-2xl font-semibold text-gray-900">{stats.totalRevenue.toFixed(2)} {CURRENCY_LABEL}</p>
             </div>
           </div>
         </div>
@@ -164,7 +163,7 @@ const DashboardPage = () => {
                 <Legend />
                 <Bar dataKey="users" fill="#00B074" name={t('users')} />
                 <Bar dataKey="orders" fill="#FFD84D" name={t('orders')} />
-                <Bar dataKey="revenue" fill="#0088FE" name={`${t('revenue')} (ر.س)`} />
+                <Bar dataKey="revenue" fill="#0088FE" name={`${t('revenue')} (${CURRENCY_LABEL})`} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -186,7 +185,7 @@ const DashboardPage = () => {
                   dataKey="value"
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                 >
-                  {userTypesDataToShow.map((entry, index) => (
+                  {userTypesDataToShow.map((_, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>

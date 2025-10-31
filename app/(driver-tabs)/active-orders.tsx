@@ -444,11 +444,16 @@ export default function DriverActiveOrders() {
       } else if (orderData && orderData.length > 0) {
         const firstOrder = orderData[0];
         console.log('✅ [Active Orders] Found active order:', firstOrder.order_number);
-        // جلب عدد الأصناف
-        const { count } = await supabase
-          .from('order_items')
-          .select('*', { count: 'exact', head: true })
-          .eq('order_id', firstOrder.id);
+        // جلب عدد الأصناف عبر RPC (يتجاوز تعقيدات RLS)
+        let itemsCount = 0;
+        try {
+          const { data: cdata } = await supabase.rpc('get_orders_items_count', { p_order_ids: [firstOrder.id] });
+          if (Array.isArray(cdata) && cdata[0] && cdata[0].order_id === firstOrder.id) {
+            itemsCount = cdata[0].items_count || 0;
+          }
+        } catch (e) {
+          console.warn('get_orders_items_count RPC error (active):', e);
+        }
 
         const customer = Array.isArray(firstOrder.customer) ? firstOrder.customer[0] : firstOrder.customer;
         const merchant = Array.isArray(firstOrder.merchant) ? firstOrder.merchant[0] : firstOrder.merchant;
@@ -470,7 +475,7 @@ export default function DriverActiveOrders() {
           total: firstOrder.total,
           delivery_fee: firstOrder.delivery_fee || 0,
           status: firstOrder.status,
-          items_count: count || 0,
+          items_count: itemsCount,
           picked_up_at: firstOrder.picked_up_at,
           heading_to_merchant_at: firstOrder.heading_to_merchant_at,
           heading_to_customer_at: firstOrder.heading_to_customer_at,
@@ -616,31 +621,24 @@ export default function DriverActiveOrders() {
     try {
       setCompleting(true);
 
-      // تسجيل الإلغاء في جدول driver_cancellations
-      const { error: cancellationError } = await supabase
-        .from('driver_cancellations')
-        .insert({
-          driver_id: user?.id,
-          order_id: activeOrder.id,
-          reason: cancelReason,
+      // استدعاء دالة آمنة على الخادم لتسجيل الإلغاء وتحديث الطلب معاً
+      const { data: rpcData, error: rpcError } = await supabase
+        .rpc('driver_cancel_order_safe', {
+          p_order_id: activeOrder.id,
+          p_reason: cancelReason,
         });
 
-      if (cancellationError) {
-        console.error('Error recording cancellation:', cancellationError);
-        // نواصل حتى لو فشل التسجيل
+      if (rpcError) {
+        console.error('❌ driver_cancel_order_safe error:', rpcError);
+        throw rpcError;
       }
 
-      // إعادة الطلب لحالة ready وإزالة السائق
-      const { error: updateError } = await supabase
-        .from('orders')
-        .update({
-          driver_id: null,
-          status: 'ready',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', activeOrder.id);
-
-      if (updateError) throw updateError;
+      const ok = rpcData?.[0]?.ok ?? false;
+      const message = rpcData?.[0]?.message || 'تم إلغاء الطلب بنجاح';
+      if (!ok) {
+        Alert.alert('تنبيه', message);
+        return;
+      }
 
       setShowCancelModal(false);
       setCancelReason('');
@@ -678,6 +676,20 @@ export default function DriverActiveOrders() {
           onPress: async () => {
             try {
               setCompleting(true);
+              // تحقق سريع من الحالة الحالية من الخادم لتجنّب التكرار
+              const { data: latest, error: latestErr } = await supabase
+                .from('orders')
+                .select('id, status')
+                .eq('id', activeOrder.id)
+                .maybeSingle();
+              if (latestErr) {
+                console.warn('check latest status error', latestErr);
+              }
+              if (latest?.status === 'delivered') {
+                Alert.alert('تنبيه', 'هذا الطلب مُسجّل كمسلَّم بالفعل.');
+                setActiveOrder(null);
+                return;
+              }
               // إنهاء التسليم مع التسوية المحاسبية عبر RPC
               const { data: fx, error: fxErr } = await supabase
                 .rpc('finalize_delivery_tx', { p_order_id: activeOrder.id });
@@ -690,6 +702,16 @@ export default function DriverActiveOrders() {
               if (!ok) {
                 Alert.alert('تنبيه', msg);
                 return;
+              }
+
+              // دفاع إضافي: عدّل الحالة إلى delivered إذا لم يقم الRPC بذلك
+              const { error: setDeliveredErr } = await supabase
+                .from('orders')
+                .update({ status: 'delivered', updated_at: new Date().toISOString() })
+                .eq('id', activeOrder.id)
+                .neq('status', 'delivered');
+              if (setDeliveredErr) {
+                console.warn('set delivered fallback error', setDeliveredErr);
               }
 
               // حفظ معلومات الطلب قبل مسحها
@@ -708,6 +730,12 @@ export default function DriverActiveOrders() {
                     router.push('/(driver-tabs)/earnings');
                   },
                 },
+                {
+                  text: 'تم',
+                  onPress: () => {
+                    setActiveOrder(null);
+                  }
+                }
               ]);
               // حتى لو لم يضغط المستخدم على زر الأرباح، نظف الحالة محلياً
               setActiveOrder(null);

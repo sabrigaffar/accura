@@ -3,7 +3,8 @@
 -- 1) Unique partial index: one active order per driver
 create unique index if not exists uq_one_active_order_per_driver
 on public.orders (driver_id)
-where status in ('heading_to_merchant','picked_up','heading_to_customer','on_the_way');
+where driver_id is not null
+  and status not in ('delivered'::order_status_enum, 'cancelled'::order_status_enum);
 
 -- 2) Safe accept RPC with atomic checks
 create or replace function public.accept_order_safe(p_order_id uuid)
@@ -20,7 +21,7 @@ begin
   select count(*) into v_active_count
   from public.orders
   where driver_id = v_driver
-    and status in ('heading_to_merchant','picked_up','heading_to_customer','on_the_way');
+    and (status::text in ('heading_to_merchant','picked_up','heading_to_customer','on_the_way'));
 
   if v_active_count > 0 then
     accepted := false;
@@ -35,7 +36,7 @@ begin
       updated_at = now()
   where id = p_order_id
     and (driver_id is null or driver_id = v_driver)
-    and status in ('ready','out_for_delivery','accepted')
+    and (status::text in ('ready','out_for_delivery','accepted'))
   returning true, 'تم قبول الطلب بنجاح' into accepted, message;
 
   if not found then

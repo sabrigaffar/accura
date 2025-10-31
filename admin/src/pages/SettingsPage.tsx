@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 
@@ -78,6 +78,7 @@ import AuditLog from '../components/AuditLog';
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [platformLoading, setPlatformLoading] = useState(false);
   const [settings, setSettings] = useState({
     siteName: 'مسافة السكة - لوحة تحكم الأدمن',
     emailNotifications: true,
@@ -87,6 +88,86 @@ const SettingsPage: React.FC = () => {
     theme: 'dark',
     maintenanceMode: false
   });
+
+  // Platform settings state
+  const [ps, setPs] = useState({
+    service_fee_flat: 2.5,
+    driver_commission_per_km: 1,
+    driver_commission_free_until: null as string | null,
+    merchant_commission_rate: 0,
+    merchant_commission_flat: 0,
+    merchant_commission_apply_on_cash: false,
+    currency: 'EGP',
+  });
+
+  useEffect(() => {
+    loadPlatformSettings();
+  }, []);
+
+  const loadPlatformSettings = async () => {
+    try {
+      setPlatformLoading(true);
+      const { data, error } = await supabase
+        .from('platform_settings')
+        .select('*')
+        .eq('id', 1)
+        .single();
+      if (error) throw error;
+      if (data) {
+        setPs({
+          service_fee_flat: Number(data.service_fee_flat ?? 2.5),
+          driver_commission_per_km: Number(data.driver_commission_per_km ?? 1),
+          driver_commission_free_until: data.driver_commission_free_until,
+          merchant_commission_rate: Number(data.merchant_commission_rate ?? 0),
+          merchant_commission_flat: Number(data.merchant_commission_flat ?? 0),
+          merchant_commission_apply_on_cash: Boolean(data.merchant_commission_apply_on_cash ?? false),
+          currency: data.currency ?? 'EGP',
+        });
+      }
+    } catch (e) {
+      console.error('loadPlatformSettings error:', e);
+    } finally {
+      setPlatformLoading(false);
+    }
+  };
+
+  const handleSavePlatformSettings = async () => {
+    try {
+      setPlatformLoading(true);
+      const payload: any = {
+        id: 1,
+        service_fee_flat: ps.service_fee_flat,
+        driver_commission_per_km: ps.driver_commission_per_km,
+        driver_commission_free_until: ps.driver_commission_free_until,
+        merchant_commission_rate: ps.merchant_commission_rate,
+        merchant_commission_flat: ps.merchant_commission_flat,
+        merchant_commission_apply_on_cash: ps.merchant_commission_apply_on_cash,
+        currency: ps.currency,
+      };
+      const { error } = await supabase
+        .from('platform_settings')
+        .upsert(payload);
+      if (error) throw error;
+      alert('تم حفظ إعدادات المنصة بنجاح');
+    } catch (e: any) {
+      alert(e.message || 'فشل حفظ إعدادات المنصة');
+    } finally {
+      setPlatformLoading(false);
+    }
+  };
+
+  const handleCancelFreePeriod = async () => {
+    try {
+      setPs((prev) => ({ ...prev, driver_commission_free_until: null }));
+      const { error } = await supabase
+        .from('platform_settings')
+        .upsert({ id: 1, driver_commission_free_until: null });
+      if (error) throw error;
+      alert('تم إلغاء الفترة المجانية بنجاح (السريان فوري)');
+    } catch (e: any) {
+      alert(e.message || 'تعذر إلغاء الفترة المجانية');
+    }
+  };
 
   const handleSaveSettings = async () => {
     setLoading(true);
@@ -222,6 +303,119 @@ const SettingsPage: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* إعدادات المنصة المالية */}
+        <div className="bg-white p-6 rounded-lg shadow">
+          <div className="flex items-center gap-2 mb-4">
+            <DatabaseIcon />
+            <h2 className="text-lg font-medium text-gray-900">إعدادات المنصة (الرسوم والعمولات)</h2>
+          </div>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">رسوم الخدمة الثابتة (EGP)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.service_fee_flat}
+                  onChange={(e) => setPs({ ...ps, service_fee_flat: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">عمولة على السائق لكل كم (EGP)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.driver_commission_per_km}
+                  onChange={(e) => setPs({ ...ps, driver_commission_per_km: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">نسبة عمولة المتاجر (%)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.merchant_commission_rate}
+                  onChange={(e) => setPs({ ...ps, merchant_commission_rate: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">عمولة ثابتة على المتاجر (EGP)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.merchant_commission_flat}
+                  onChange={(e) => setPs({ ...ps, merchant_commission_flat: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">العملة</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.currency}
+                  onChange={(e) => setPs({ ...ps, currency: e.target.value })}
+                />
+              </div>
+
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  id="merchant_commission_apply_on_cash"
+                  type="checkbox"
+                  checked={ps.merchant_commission_apply_on_cash}
+                  onChange={(e) => setPs({ ...ps, merchant_commission_apply_on_cash: e.target.checked })}
+                />
+                <label htmlFor="merchant_commission_apply_on_cash" className="text-sm text-gray-700">
+                  تطبيق عمولة المنصة على التاجر في الكاش
+                </label>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">انتهاء الفترة المجانية (اختياري)</label>
+                <input
+                  type="datetime-local"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.driver_commission_free_until ? new Date(ps.driver_commission_free_until).toISOString().slice(0,16) : ''}
+                  onChange={(e) => setPs({ ...ps, driver_commission_free_until: e.target.value ? new Date(e.target.value).toISOString() : null })}
+                />
+                <button
+                  type="button"
+                  onClick={handleCancelFreePeriod}
+                  className="mt-1 px-3 py-2 border border-transparent rounded-md text-sm text-white bg-primary hover:bg-primary-dark"
+                  disabled={platformLoading}
+                >
+                  إلغاء الفترة المجانية الآن
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleSavePlatformSettings}
+                className="px-4 py-2 rounded-md text-white bg-primary hover:bg-primary-dark"
+                disabled={platformLoading}
+              >
+                {platformLoading ? 'جاري الحفظ...' : 'حفظ إعدادات المنصة'}
+              </button>
+              <button
+                type="button"
+                onClick={loadPlatformSettings}
+                className="px-4 py-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50"
+                disabled={platformLoading}
+              >
+                إعادة التحميل
+              </button>
+            </div>
+          </div>
+        </div>
         {/* إعدادات الموقع */}
         <div className="bg-white p-6 rounded-lg shadow">
           <div className="flex items-center gap-2 mb-4">

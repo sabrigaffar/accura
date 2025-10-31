@@ -22,6 +22,7 @@ const MerchantsPage = () => {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [ownerFilter, setOwnerFilter] = useState<string>(''); // فلتر المالك
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
@@ -35,6 +36,33 @@ const MerchantsPage = () => {
   const { hasPermission } = usePermissions();
   const { t } = useLanguage();
   const { user: authUser } = useAuth();
+
+  // قائمة الملاك (owners) لفلترة التجار
+  const [owners, setOwners] = useState<Array<{ id: string; name: string }>>([]);
+  useEffect(() => {
+    const fetchOwners = async () => {
+      try {
+        // اجلب جميع owner_id المميزة من merchants مع اسم المالك من profiles
+        const { data, error } = await supabase
+          .from('merchants')
+          .select('owner_id, profiles:profiles!merchants_owner_id_fkey(full_name)')
+          .not('owner_id', 'is', null);
+        if (error) throw error;
+        const map: Record<string, string> = {};
+        (data || []).forEach((row: any) => {
+          const ownerId = row.owner_id as string;
+          const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
+          const name = profile?.full_name || ownerId.slice(0, 8);
+          if (ownerId && !map[ownerId]) map[ownerId] = name;
+        });
+        const list = Object.entries(map).map(([id, name]) => ({ id, name }));
+        setOwners(list);
+      } catch (e) {
+        console.warn('fetchOwners error', e);
+      }
+    };
+    fetchOwners();
+  }, []);
 
   // Use the custom hook to fetch merchants
   const { merchants, loading, error, refresh } = useMerchants({
@@ -53,6 +81,10 @@ const MerchantsPage = () => {
           merchant.name_ar.toLowerCase().includes(searchLower) ||
           merchant.owner_id.toLowerCase().includes(searchLower)
         );
+      }
+      // Apply owner filter
+      if (ownerFilter && merchant.owner_id !== ownerFilter) {
+        return false;
       }
       return true;
     })
@@ -240,6 +272,36 @@ const MerchantsPage = () => {
             {t('addMerchant')}
           </button>
         )}
+      </div>
+
+      {/* شريط فلترة المالك (Owner ID) */}
+      <div className="bg-white p-4 rounded-lg shadow flex flex-col md:flex-row md:items-end gap-3">
+        <div className="flex flex-col">
+          <label className="text-sm text-gray-600 mb-1">المالك (Owner)</label>
+          <div className="flex gap-2">
+            <select
+              className="border rounded px-3 py-2 min-w-[260px]"
+              value={ownerFilter}
+              onChange={(e) => setOwnerFilter(e.target.value)}
+            >
+              <option value="">الكل</option>
+              {owners.map(o => (
+                <option key={o.id} value={o.id}>{o.name} ({o.id.slice(0,8)})</option>
+              ))}
+            </select>
+            <input
+              type="text"
+              placeholder="أو أدخل Owner ID يدوياً"
+              className="border rounded px-3 py-2 min-w-[260px]"
+              value={ownerFilter}
+              onChange={(e) => setOwnerFilter(e.target.value.trim())}
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={() => refresh()}>تحديث</button>
+          <button className="btn-light" onClick={() => setOwnerFilter('')}>مسح الفلتر</button>
+        </div>
       </div>
 
       {/* فلاتر البحث */}

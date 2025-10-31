@@ -10,6 +10,8 @@ import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import MerchantSubscriptionsPage from './pages/MerchantSubscriptionsPage';
 import AdminWalletPage from './pages/AdminWalletPage';
+import PromotionsPage from './pages/PromotionsPage';
+import PromotionRulesPage from './pages/PromotionRulesPage';
 
 import NotificationSystem from './components/NotificationSystem';
 import { useAuth } from './contexts/AuthContext';
@@ -39,6 +41,8 @@ function App() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="wallet" element={<AdminWalletPage />} />
           <Route path="subscriptions" element={<MerchantSubscriptionsPage />} />
+          <Route path="promotions" element={<PromotionsPage />} />
+          <Route path="promotion-rules" element={<PromotionRulesPage />} />
         </Route>
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} replace />} />
       </Routes>
