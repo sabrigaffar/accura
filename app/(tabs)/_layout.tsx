@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Home, ShoppingBag, Store, MessageCircle, Tag, User } from 'lucide-react-native';
+import { Home, ShoppingBag, Store, MessageCircle, Tag, User, Bell, Wallet } from 'lucide-react-native';
 import { colors, typography } from '@/constants/theme';
 
 export default function TabLayout() {
@@ -26,6 +26,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'الرئيسية',
+          tabBarLabel: 'الرئيسية',
           tabBarIcon: ({ size, color }) => <Home size={size} color={color} />,
         }}
       />
@@ -33,6 +34,7 @@ export default function TabLayout() {
         name="merchants"
         options={{
           title: 'المتاجر',
+          tabBarLabel: 'المتاجر',
           tabBarIcon: ({ size, color }) => <Store size={size} color={color} />,
         }}
       />
@@ -40,6 +42,7 @@ export default function TabLayout() {
         name="orders"
         options={{
           title: 'الطلبات',
+          tabBarLabel: 'الطلبات',
           tabBarIcon: ({ size, color }) => <ShoppingBag size={size} color={color} />,
         }}
       />
@@ -47,6 +50,7 @@ export default function TabLayout() {
         name="chat"
         options={{
           title: 'المحادثة',
+          tabBarLabel: 'المحادثة',
           tabBarIcon: ({ size, color }) => <MessageCircle size={size} color={color} />,
         }}
       />
@@ -54,13 +58,31 @@ export default function TabLayout() {
         name="offers"
         options={{
           title: 'العروض',
+          tabBarLabel: 'العروض',
           tabBarIcon: ({ size, color }) => <Tag size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'الإشعارات',
+          tabBarLabel: 'الإشعارات',
+          tabBarIcon: ({ size, color }) => <Bell size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="wallet"
+        options={{
+          title: 'المحفظة',
+          tabBarLabel: 'المحفظة',
+          tabBarIcon: ({ size, color }) => <Wallet size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'حسابي',
+          tabBarLabel: 'حسابي',
           tabBarIcon: ({ size, color }) => <User size={size} color={color} />,
         }}
       />
