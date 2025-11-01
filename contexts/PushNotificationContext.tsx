@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform, Alert } from 'react-native';
+import Constants from 'expo-constants';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from './AuthContext';
 import { router } from 'expo-router';
@@ -104,23 +105,26 @@ export function PushNotificationProvider({ children }: PushNotificationProviderP
 
       // الحصول على Push Token (اختياري في Development)
       try {
-        const tokenData = await Notifications.getExpoPushTokenAsync({
-          projectId: process.env.EXPO_PUBLIC_PROJECT_ID,
-        });
-        
-        const token = tokenData.data;
-        console.log('✅ Push Token:', token);
-        setExpoPushToken(token);
+        // Expo Go على أندرويد لا يدعم الإشعارات البعيدة منذ SDK 53
+        if (Platform.OS === 'android' && (Constants as any)?.appOwnership === 'expo') {
+          console.log('ℹ️ Expo Go (Android) لا يدعم Push Token بعد SDK 53. تخطي طلب الرمز والاكتفاء بالإشعارات المحلية.');
+        } else {
+          const tokenData = await Notifications.getExpoPushTokenAsync({
+            projectId: process.env.EXPO_PUBLIC_PROJECT_ID,
+          });
+          const token = tokenData.data;
+          console.log('✅ Push Token:', token);
+          setExpoPushToken(token);
 
-        // حفظ Token في قاعدة البيانات
-        if (user?.id) {
-          await savePushTokenToDatabase(token);
+          // حفظ Token في قاعدة البيانات
+          if (user?.id) {
+            await savePushTokenToDatabase(token);
+          }
         }
       } catch (tokenError: any) {
-        // في Development (Expo Go)، Push Token غير متاح - وهذا طبيعي
+        // في وضع التطوير، قد لا يتوفر Push Token — استخدم المحلي فقط
         console.log('ℹ️ Push Token not available (Development mode):', tokenError.message);
         console.log('✅ Local notifications will still work!');
-        // لا نرمي الخطأ - الإشعارات المحلية تعمل بدون Push Token
       }
 
       // تكوين قناة الإشعارات لـ Android

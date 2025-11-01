@@ -4,6 +4,7 @@
  */
 
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
@@ -36,6 +37,12 @@ class NotificationService {
       // التحقق من أننا على جهاز حقيقي
       if (!Device.isDevice) {
         console.warn('الإشعارات تعمل فقط على الأجهزة الحقيقية');
+        return null;
+      }
+
+      // في Expo Go على أندرويد، لا تتوفر الإشعارات البعيدة (SDK 53+)
+      if (Platform.OS === 'android' && (Constants as any)?.appOwnership === 'expo') {
+        console.warn('Expo Go على أندرويد لا يدعم الإشعارات البعيدة بعد SDK 53. استخدم Development Build (expo-dev-client).');
         return null;
       }
 
@@ -146,13 +153,23 @@ class NotificationService {
     try {
       const { data, error } = await supabase
         .from('notifications')
-        .select('*')
+        .select(`
+          id,
+          user_id,
+          coalesce(title, title_ar, title_en) as title,
+          coalesce(body, body_ar, body_en) as body,
+          coalesce(type, notification_type) as type,
+          data,
+          is_read,
+          created_at,
+          read_at
+        `)
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .limit(limit);
 
       if (error) throw error;
-      return data || [];
+      return (data as any) || [];
     } catch (error) {
       console.error('خطأ في جلب الإشعارات:', error);
       return [];
@@ -298,7 +315,19 @@ class NotificationService {
           filter: `user_id=eq.${userId}`,
         },
         (payload) => {
-          callback(payload.new as Notification);
+          const n: any = payload.new || {};
+          const normalized: Notification = {
+            id: n.id,
+            user_id: n.user_id,
+            title: n.title ?? n.title_ar ?? n.title_en ?? '',
+            body: n.body ?? n.body_ar ?? n.body_en ?? '',
+            type: n.type ?? n.notification_type ?? 'system',
+            data: n.data || {},
+            is_read: !!n.is_read,
+            created_at: n.created_at,
+            read_at: n.read_at ?? null,
+          };
+          callback(normalized);
         }
       )
       .subscribe();

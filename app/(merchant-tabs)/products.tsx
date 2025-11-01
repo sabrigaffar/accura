@@ -26,6 +26,7 @@ export default function MerchantProducts() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const { activeStore, stores, isAllStoresSelected } = useActiveStore();
+  const [usingLegacyProducts, setUsingLegacyProducts] = useState(false);
 
   useEffect(() => {
     if (activeStore || isAllStoresSelected) {
@@ -48,8 +49,24 @@ export default function MerchantProducts() {
         // جلب منتجات جميع المتاجر
         const storeIds = stores.map(s => s.id);
         const { data, error } = await query.in('store_id', storeIds).order('created_at', { ascending: false });
-        if (error) throw error;
-        setProducts(data || []);
+        if (error) {
+          if ((error as any).code === 'PGRST205') {
+            // الجدول products غير موجود -> استخدم الجدول القديم merchant_products
+            const { data: legacyData, error: legacyErr } = await supabase
+              .from('merchant_products')
+              .select('*')
+              .in('merchant_id', storeIds)
+              .order('created_at', { ascending: false });
+            if (legacyErr) throw legacyErr;
+            setUsingLegacyProducts(true);
+            setProducts(normalizeLegacyProducts(legacyData || []));
+          } else {
+            throw error;
+          }
+        } else {
+          setUsingLegacyProducts(false);
+          setProducts(data || []);
+        }
       } else if (activeStore) {
         // تصفية حسب المتجر النشط
         const { data, error } = await query.eq('store_id', activeStore.id).order('created_at', { ascending: false });
@@ -63,7 +80,19 @@ export default function MerchantProducts() {
             .order('created_at', { ascending: false });
           setProducts(fallback.data || []);
         } else if (error) {
-          throw error;
+          if ((error as any).code === 'PGRST205') {
+            // الجدول products غير موجود -> استخدم الجدول القديم merchant_products
+            const { data: legacyData, error: legacyErr } = await supabase
+              .from('merchant_products')
+              .select('*')
+              .eq('merchant_id', activeStore.id)
+              .order('created_at', { ascending: false });
+            if (legacyErr) throw legacyErr;
+            setUsingLegacyProducts(true);
+            setProducts(normalizeLegacyProducts(legacyData || []));
+          } else {
+            throw error;
+          }
         } else {
           setProducts(data || []);
         }
@@ -89,7 +118,17 @@ export default function MerchantProducts() {
         .update({ is_active: !currentStatus })
         .eq('id', productId);
 
-      if (error) throw error;
+      if (error) {
+        if ((error as any).code === 'PGRST205') {
+          const { error: legacyErr } = await supabase
+            .from('merchant_products')
+            .update({ is_available: !currentStatus })
+            .eq('id', productId);
+          if (legacyErr) throw legacyErr;
+        } else {
+          throw error;
+        }
+      }
       
       fetchProducts();
       Alert.alert('تم', `تم ${!currentStatus ? 'تفعيل' : 'تعطيل'} المنتج بنجاح`);
@@ -114,7 +153,17 @@ export default function MerchantProducts() {
                 .delete()
                 .eq('id', productId);
 
-              if (error) throw error;
+              if (error) {
+                if ((error as any).code === 'PGRST205') {
+                  const { error: legacyErr } = await supabase
+                    .from('merchant_products')
+                    .delete()
+                    .eq('id', productId);
+                  if (legacyErr) throw legacyErr;
+                } else {
+                  throw error;
+                }
+              }
               
               fetchProducts();
               Alert.alert('تم', 'تم حذف المنتج بنجاح');
@@ -191,6 +240,21 @@ export default function MerchantProducts() {
       )}
     </View>
   );
+
+  // تحويل بيانات legacy merchant_products إلى الشكل القياسي لواجهة المستخدم
+  function normalizeLegacyProducts(rows: any[]): Product[] {
+    return (rows || []).map((r: any) => ({
+      id: r.id,
+      name: r.name_ar || r.name_en || 'منتج',
+      description: r.description_ar || r.description_en || '',
+      price: Number(r.price || 0),
+      discount_price: undefined,
+      quantity: 0,
+      category: r.category || '',
+      images: r.image_url ? [r.image_url] : [],
+      is_active: r.is_available !== false,
+    }));
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

@@ -154,7 +154,29 @@ export default function AddProductScreen() {
         error = retry.error as any;
       }
 
-      if (error) throw error;
+      if (error) {
+        if ((error as any).code === 'PGRST205') {
+          // لا يوجد جدول products -> استخدم الجدول القديم merchant_products
+          const legacyPayload: any = {
+            merchant_id: selectedStore.id, // في الجدول القديم يشير إلى معرف المتجر
+            name_ar: insertPayload.name,
+            description_ar: insertPayload.description,
+            price: insertPayload.price,
+            image_url: (insertPayload.images && insertPayload.images[0]) || null,
+            category: insertPayload.category,
+            is_available: true,
+          };
+          const retryLegacy = await supabase
+            .from('merchant_products')
+            .insert(legacyPayload)
+            .select()
+            .single();
+          if (retryLegacy.error) throw retryLegacy.error;
+          data = retryLegacy.data as any;
+        } else {
+          throw error;
+        }
+      }
 
       setLoading(false);
       Alert.alert(

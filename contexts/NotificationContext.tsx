@@ -7,7 +7,6 @@ import * as Notifications from 'expo-notifications';
 import { notificationService } from '@/lib/notificationService';
 import { supabase } from '@/lib/supabase';
 import type { Notification } from '@/types/notification';
-import { useAuth } from '@/contexts/AuthContext';
 
 interface NotificationContextType {
   notifications: Notification[];
@@ -26,36 +25,32 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
-  const { session } = useAuth();
 
-  // تهيئة الإشعارات عند تغيّر المستخدم
+  // تهيئة الإشعارات
   useEffect(() => {
-    const uid = session?.user?.id ?? null;
-    setUserId(uid);
-
-    let cancelled = false;
-    const run = async () => {
+    const initializeNotifications = async () => {
       try {
-        if (!uid) {
-          // عند تسجيل الخروج نفّرغ الحالة
-          setNotifications([]);
-          setUnreadCount(0);
-          return;
-        }
-        // تهيئة خدمة الإشعارات وتسجيل التوكن
+        // الحصول على المستخدم الحالي
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        setUserId(user.id);
+
+        // تهيئة خدمة الإشعارات
         await notificationService.initialize();
-        await notificationService.registerPushToken(uid);
-        // جلب الإشعارات الحالية
-        await loadNotifications(uid);
+        await notificationService.registerPushToken(user.id);
+
+        // جلب الإشعارات
+        await loadNotifications(user.id);
       } catch (error) {
         console.error('خطأ في تهيئة الإشعارات:', error);
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
     };
-    run();
-    return () => { cancelled = true; };
-  }, [session?.user?.id]);
+
+    initializeNotifications();
+  }, []);
 
   // تحميل الإشعارات
   const loadNotifications = async (uid: string) => {

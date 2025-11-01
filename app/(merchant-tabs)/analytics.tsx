@@ -106,8 +106,16 @@ export default function MerchantAnalytics() {
       let products: any[] = [];
       if (isAllStoresSelected && stores.length > 0) {
         const storeIds = stores.map(s => s.id);
-        const { data } = await productsQuery.in('store_id', storeIds);
-        products = data || [];
+        const { data, error } = await productsQuery.in('store_id', storeIds);
+        if (error && (error as any).code === 'PGRST205') {
+          const { data: legacy } = await supabase
+            .from('merchant_products')
+            .select('id')
+            .in('merchant_id', storeIds);
+          products = legacy || [];
+        } else {
+          products = data || [];
+        }
       } else if (activeStore) {
         const { data, error } = await productsQuery.eq('store_id', activeStore.id);
         if (error && error.code === '42703') {
@@ -116,6 +124,12 @@ export default function MerchantAnalytics() {
             .select('id, is_active')
             .eq('merchant_id', user.id);
           products = fallback.data || [];
+        } else if (error && (error as any).code === 'PGRST205') {
+          const { data: legacy } = await supabase
+            .from('merchant_products')
+            .select('id')
+            .eq('merchant_id', activeStore.id);
+          products = legacy || [];
         } else {
           products = data || [];
         }

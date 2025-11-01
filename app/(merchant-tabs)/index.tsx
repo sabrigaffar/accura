@@ -71,12 +71,20 @@ export default function MerchantDashboard() {
       if (isAllStoresSelected) {
         // جلب منتجات جميع المتاجر
         const storeIds = stores.map(s => s.id);
-        const { data: products } = await supabase
+        const { data: products, error: prodErr } = await supabase
           .from('products')
           .select('id, is_active, store_id')
           .eq('merchant_id', user.id)
           .in('store_id', storeIds);
-        finalProducts = products || [];
+        if (prodErr && (prodErr as any).code === 'PGRST205') {
+          const { data: legacy } = await supabase
+            .from('merchant_products')
+            .select('id, is_available, merchant_id')
+            .in('merchant_id', storeIds);
+          finalProducts = (legacy || []).map((r: any) => ({ id: r.id, is_active: r.is_available, store_id: r.merchant_id }));
+        } else {
+          finalProducts = products || [];
+        }
       } else if (activeStore) {
         // تصفية المنتجات حسب المتجر النشط
         let productsQuery = supabase
@@ -95,6 +103,12 @@ export default function MerchantDashboard() {
             .select('id, is_active')
             .eq('merchant_id', user.id);
           finalProducts = fallback.data || [];
+        } else if (productsError && (productsError as any).code === 'PGRST205') {
+          const { data: legacy } = await supabase
+            .from('merchant_products')
+            .select('id, is_available')
+            .eq('merchant_id', activeStore.id);
+          finalProducts = (legacy || []).map((r: any) => ({ id: r.id, is_active: r.is_available }));
         }
       }
 

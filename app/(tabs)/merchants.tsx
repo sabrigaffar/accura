@@ -50,30 +50,24 @@ export default function MerchantsScreen() {
   const fetchMerchants = async () => {
     try {
       setLoading(true);
-      // محاولة استخدام ال RPC أولاً
-      const rpc = await supabase.rpc('list_active_merchants');
-      if (rpc.error) {
-        console.warn('list_active_merchants error, fallback to direct query:', rpc.error.message);
-      }
-      let data = (rpc.data as any[]) || [];
+      // Use RPC to fetch only merchants with active subscription or within trial (SECURITY DEFINER on server)
+      const { data, error } = await supabase
+        .rpc('list_active_merchants');
 
-      // Fallback: اعرض كل المتاجر النشطة إن لم تكن هناك اشتراكات/تجارب مفعلة في التطوير
-      if (!data || data.length === 0) {
-        const { data: direct, error: qErr } = await supabase
+      if (error) {
+        // Fallback: select active merchants directly if RPC is not available
+        const { data: fallback, error: fbErr } = await supabase
           .from('merchants')
           .select('*')
           .eq('is_active', true)
           .order('created_at', { ascending: false });
-        if (qErr) {
-          console.error('Error fetching merchants:', qErr);
-          data = [];
-        } else {
-          data = direct as any[];
-        }
+        if (fbErr) throw fbErr;
+        setMerchants((fallback as any) || []);
+        setFilteredMerchants((fallback as any) || []);
+      } else {
+        setMerchants((data as any) || []);
+        setFilteredMerchants((data as any) || []);
       }
-
-      setMerchants((data as any) || []);
-      setFilteredMerchants((data as any) || []);
     } catch (error) {
       console.error('Error fetching merchants:', error);
     } finally {

@@ -88,8 +88,32 @@ export default function MerchantDetailScreen() {
         .eq('store_id', storeId)  // استخدام store_id لجلب منتجات المتجر المحدد فقط
         .eq('is_active', true);
 
-      if (error) throw error;
-      setProducts(data || []);
+      if (error) {
+        if ((error as any).code === 'PGRST205') {
+          // الجدول products غير موجود -> استخدم الجدول القديم merchant_products
+          const { data: legacyData, error: legacyErr } = await supabase
+            .from('merchant_products')
+            .select('*')
+            .eq('merchant_id', storeId)
+            .eq('is_available', true);
+          if (legacyErr) throw legacyErr;
+          setProducts((legacyData || []).map((r: any) => ({
+            id: r.id,
+            name: r.name_ar || r.name_en || 'منتج',
+            description: r.description_ar || r.description_en || '',
+            price: Number(r.price || 0),
+            discount_price: undefined,
+            quantity: 0,
+            category: r.category || '',
+            images: r.image_url ? [r.image_url] : [],
+            is_active: r.is_available !== false,
+          })));
+        } else {
+          throw error;
+        }
+      } else {
+        setProducts(data || []);
+      }
       setLoading(false);
     } catch (error) {
       console.error('Error fetching products:', error);
