@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Alert, Linking, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { ShoppingCart, Clock, CheckCircle, XCircle, Package } from 'lucide-react-native';
@@ -14,6 +14,7 @@ interface Order {
   id: string;
   order_number?: string;
   customer_id: string;
+  driver_id?: string | null;
   status: string;
   total: number;  // إجمالي العميل (legacy)
   product_total?: number | null;
@@ -30,6 +31,13 @@ interface Order {
     full_name: string;
     phone_number: string;
   } | null;
+  driver?: {
+    full_name: string;
+    phone_number: string;
+    avatar_url?: string | null;
+    photo_url?: string | null;
+  } | null;
+  driver_avatar_url?: string | null;
   order_items?: Array<{
     id: string;
     quantity: number;
@@ -38,17 +46,26 @@ interface Order {
       name_ar?: string;
       name?: string;
     };
+    merchant_products?: {
+      name_ar?: string;
+      name?: string;
+    };
   }>;
 }
 
 const ORDER_STATUSES = [
-  { value: 'all', label: 'الكل', color: colors.text },
-  { value: 'pending', label: 'قيد الانتظار', color: colors.warning },
-  { value: 'accepted', label: 'مقبول', color: colors.success },
-  { value: 'preparing', label: 'قيد التحضير', color: colors.primary },
-  { value: 'ready', label: 'جاهز', color: colors.success },
-  { value: 'rejected', label: 'مرفوض', color: colors.error },
+  { value: 'all', label: 'الكل', color: colors.text, icon: '📊' },
+  { value: 'pending', label: 'انتظار', color: colors.warning, icon: '⏰' },
+  { value: 'accepted', label: 'مقبول', color: colors.success, icon: '✅' },
+  { value: 'preparing', label: 'تحضير', color: colors.primary, icon: '🔵' },
+  { value: 'ready', label: 'جاهز', color: colors.success, icon: '🎉' },
+  { value: 'picked_up', label: 'تم الاستلام', color: colors.primary, icon: '📦' },
+  { value: 'on_the_way', label: 'في الطريق', color: colors.primary, icon: '🛵' },
+  { value: 'delivered', label: 'تم التوصيل', color: colors.success, icon: '✅' },
+  { value: 'cancelled', label: 'ملغى', color: colors.error, icon: '❌' },
 ];
+
+const SHOW_DRIVER_STATUSES = ['accepted', 'ready', 'picked_up', 'on_the_way', 'delivered'];
 
 export default function MerchantOrders() {
   const { user } = useAuth();
@@ -58,6 +75,7 @@ export default function MerchantOrders() {
   const [selectedStatus, setSelectedStatus] = useState('all');
   const { activeStore, stores, isAllStoresSelected } = useActiveStore();
   const fetchingRef = React.useRef(false);
+  const lastFetchAtRef = React.useRef(0);
 
   // Real-time subscriptions للطلبات
   const merchantIds = React.useMemo(() => stores.map(s => s.id), [stores]);
@@ -92,11 +110,12 @@ export default function MerchantOrders() {
     }, [activeStore, isAllStoresSelected])
   );
 
-  const fetchOrders = async () => {
+  const fetchOrders = React.useCallback(async () => {
     try {
-      if (fetchingRef.current) {
-        return;
-      }
+      const now = Date.now();
+      if (fetchingRef.current) return;
+      if (now - lastFetchAtRef.current < 800) return; // throttle
+      lastFetchAtRef.current = now;
       fetchingRef.current = true;
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -129,48 +148,147 @@ export default function MerchantOrders() {
       console.log('🏪 [Merchant] Store IDs:', storeIds);
 
       // جلب الطلبات من جميع متاجر التاجر
-      let query = supabase
-        .from('orders')
-        .select(`
+      // نبني select مع علاقة صريحة لـ merchant_products باستخدام اسم قيد FK
+      const baseSelect = (embed: string) => `
+        id,
+        order_number,
+        customer_id,
+        driver_id,
+        status,
+        total,
+        product_total,
+        delivery_fee,
+        service_fee,
+        tax_amount,
+        customer_total,
+        created_at,
+        customer_latitude,
+        customer_longitude,
+        customer:profiles!orders_customer_id_fkey(full_name, phone_number),
+        driver:profiles!orders_driver_id_fkey(full_name, phone_number, avatar_url),
+        order_items(
           id,
-          order_number,
-          customer_id,
-          status,
-          total,
-          product_total,
-          delivery_fee,
-          service_fee,
-          tax_amount,
-          customer_total,
-          created_at,
-          customer_latitude,
-          customer_longitude,
-          profiles:profiles!orders_customer_id_fkey(full_name, phone_number),
-          order_items(
-            id,
-            quantity,
-            price,
-            products(name)
-          )
-        `)
+          quantity,
+          price,
+          ${embed}
+        )
+      `;
+
+      // المحاولة الأولى بقيد order_items_product_id_fkey
+      const embed1 = `merchant_products!order_items_product_id_fkey ( name_ar )`;
+      let resp1 = await supabase
+        .from('orders')
+        .select(baseSelect(embed1))
         .in('merchant_id', storeIds)
         .order('created_at', { ascending: false });
 
-      // ✅ تنفيذ الاستعلام مباشرة
-      const { data: ordersData, error: ordersError } = await query;
+      let ordersData = resp1.data as any[] | null;
+      let ordersError = resp1.error;
+
+      // إذا ظهر خطأ تعدد العلاقات أو علاقة مختلفة، جرب الاسم البديل
+      if (ordersError) {
+        const embed2 = `merchant_products!order_items_product_fk ( name_ar )`;
+        let resp2 = await supabase
+          .from('orders')
+          .select(baseSelect(embed2))
+          .in('merchant_id', storeIds)
+          .order('created_at', { ascending: false });
+        ordersData = resp2.data as any[] | null;
+        ordersError = resp2.error;
+      }
+
+      // إذا مازال هناك خطأ، حاول على الأقل بدون تضمين المنتج (سنعتمد على RPC الملخص إذا لزم)
+      if (ordersError) {
+        const resp3 = await supabase
+          .from('orders')
+          .select(`
+            id, order_number, customer_id, driver_id, status, total, product_total, delivery_fee, service_fee, tax_amount, customer_total, created_at,
+            customer_latitude, customer_longitude,
+            customer:profiles!orders_customer_id_fkey(full_name, phone_number),
+            driver:profiles!orders_driver_id_fkey(full_name, phone_number, avatar_url),
+            order_items(id, quantity, price)
+          `)
+          .in('merchant_id', storeIds)
+          .order('created_at', { ascending: false });
+        ordersData = resp3.data as any[] | null;
+        ordersError = resp3.error;
+      }
 
       if (ordersError) {
         console.error('❌ [Merchant] Error fetching orders:', ordersError);
         throw ordersError;
       }
 
-      
       console.log(`✅ [Merchant] Fetched ${ordersData?.length || 0} orders`);
       // ✅ بعض نسخ Supabase قد تُرجع العلاقة كـ Array بدلاً من Object
-      const normalizedOrders: Order[] = (ordersData || []).map((o: any) => ({
+      let normalizedOrders: Order[] = (ordersData || []).map((o: any) => ({
         ...o,
+        // ✅ بعض نسخ Supabase قد تُرجع العلاقة كـ Array بدلاً من Object
+        customer: Array.isArray(o?.customer) ? (o.customer[0] || null) : (o?.customer ?? null),
         profiles: Array.isArray(o?.profiles) ? (o.profiles[0] || null) : (o?.profiles ?? null),
+        driver: Array.isArray(o?.driver) ? (o.driver[0] || null) : (o?.driver ?? null),
       }));
+
+      // 🔁 Fallback: إذا لم تُعد علاقة السائق لكن هناك driver_id، نجلب ملفات السائقين دفعة واحدة ونحقنها
+      try {
+        const missingDriver = normalizedOrders.some((o: any) => o.driver_id && !o.driver);
+        if (missingDriver) {
+          const driverIds = Array.from(new Set(normalizedOrders.filter((o: any) => o.driver_id).map((o: any) => o.driver_id)));
+          if (driverIds.length > 0) {
+            const { data: driversData, error: driversErr } = await supabase
+              .from('profiles')
+              .select('id, full_name, phone_number, avatar_url')
+              .in('id', driverIds);
+            if (!driversErr && Array.isArray(driversData)) {
+              const dmap = new Map(driversData.map((d: any) => [d.id, { full_name: d.full_name, phone_number: d.phone_number, avatar_url: d.avatar_url } ]));
+              normalizedOrders = normalizedOrders.map((o: any) => ({
+                ...o,
+                driver: o.driver || (o.driver_id ? dmap.get(o.driver_id) || null : null),
+              }));
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ Failed to backfill driver profiles for orders', e);
+      }
+
+      // 🔁 Fallback 2: لو لم نجد صورة في profiles، نحاول driver_profiles.photo_url
+      try {
+        const needPhoto = normalizedOrders.some((o: any) => o.driver_id && !((o as any).driver?.avatar_url) && !(o as any).driver_avatar_url);
+        if (needPhoto) {
+          const ids = Array.from(new Set(normalizedOrders.filter((o: any) => o.driver_id).map((o: any) => o.driver_id)));
+          if (ids.length > 0) {
+            const { data: dprofs, error: derr } = await supabase
+              .from('driver_profiles')
+              .select('id, photo_url')
+              .in('id', ids);
+            if (!derr && Array.isArray(dprofs)) {
+              const pmap = new Map(dprofs.map((d: any) => {
+                let url = d.photo_url as string | null;
+                if (url && !url.startsWith('http')) {
+                  const { data } = supabase.storage.from('driver-photos').getPublicUrl(url);
+                  url = data?.publicUrl || url;
+                }
+                return [d.id, url];
+              }));
+              normalizedOrders = normalizedOrders.map((o: any) => ({
+                ...o,
+                driver_avatar_url: (o.driver?.avatar_url ?? null) || (o.driver_avatar_url ?? pmap.get(o.driver_id) ?? null),
+                driver: o.driver ? { ...o.driver, photo_url: o.driver?.photo_url ?? pmap.get(o.driver_id) ?? null } : o.driver,
+              }));
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ Failed to backfill driver photo from driver_profiles', e);
+      }
+      // Debug counts
+      try {
+        const withDriverId = normalizedOrders.filter((o: any) => !!o.driver_id).length;
+        const withDriverProfile = normalizedOrders.filter((o: any) => !!o.driver).length;
+        console.log(`🏪 [Merchant] Orders with driver_id=${withDriverId}, with driver profile=${withDriverProfile}`);
+      } catch {}
+
       setOrders(normalizedOrders);
     } catch (error: any) {
       console.error('Error fetching orders:', error);
@@ -180,7 +298,7 @@ export default function MerchantOrders() {
       setRefreshing(false);
       fetchingRef.current = false;
     }
-  };
+  }, [activeStore, isAllStoresSelected]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -189,17 +307,56 @@ export default function MerchantOrders() {
 
   const updateOrderStatus = async (orderId: string, newStatus: string) => {
     try {
+      // اجلب حالة الطلب الحالية مرة واحدة لإتخاذ القرار
+      const { data: currentOrder, error: currentErr } = await supabase
+        .from('orders')
+        .select('status')
+        .eq('id', orderId)
+        .single();
+      if (currentErr) {
+        console.error('❌ Failed to load current order status before update:', currentErr);
+      }
+
+      // ✅ حجز المخزون يتم لمرة واحدة فقط عند الانتقال من pending
+      const needsReserve = (currentOrder?.status === 'pending') && ['accepted','preparing','ready'].includes(newStatus);
+      if (needsReserve) {
+        const { data: reserveResult, error: reserveError } = await supabase.rpc('reserve_order_stock', { p_order_id: orderId });
+        if (reserveError) {
+          console.error('❌ Stock reservation error:', reserveError);
+          Alert.alert('خطأ', 'حدث خطأ أثناء حجز المخزون');
+          return;
+        }
+        if (reserveResult && reserveResult.length > 0 && !reserveResult[0].ok) {
+          Alert.alert('مخزون غير كافٍ', reserveResult[0].message || 'لا يمكن قبول الطلب بسبب نقص المخزون', [{ text: 'حسناً' }]);
+          return;
+        }
+      }
+
+      // ✅ إرجاع المخزون عند إلغاء الطلب (فقط إذا كان قد تم حجزه سابقًا)
+      if (newStatus === 'cancelled') {
+        if (currentOrder && ['accepted', 'preparing', 'ready'].includes(currentOrder.status)) {
+          await supabase.rpc('release_order_stock', { p_order_id: orderId });
+        }
+      }
+
       const { error } = await supabase
         .from('orders')
-        .update({ status: newStatus })
+        .update({ 
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
         .eq('id', orderId);
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Error updating order status:', error);
+        throw error;
+      }
       
       fetchOrders();
       Alert.alert('تم', 'تم تحديث حالة الطلب بنجاح');
     } catch (error: any) {
-      Alert.alert('خطأ', 'حدث خطأ أثناء تحديث حالة الطلب');
+      console.error('❌ Update order error:', error);
+      Alert.alert('خطأ', `حدث خطأ أثناء تحديث حالة الطلب: ${error.message || ''}`);
     }
   };
 
@@ -213,94 +370,192 @@ export default function MerchantOrders() {
     return statusObj?.label || status;
   };
 
+  const getStatusIcon = (status: string) => {
+    const icons: { [key: string]: string } = {
+      pending: '⏰',
+      accepted: '✅',
+      preparing: '👨‍🍳',
+      ready: '🎉',
+      picked_up: '📦',
+      on_the_way: '🛵',
+      delivered: '✅',
+      cancelled: '❌',
+    };
+    return icons[status] || '📦';
+  };
+
+  const handleCallCustomer = (phoneNumber: string) => {
+    if (phoneNumber && phoneNumber !== 'غير متاح') {
+      Linking.openURL(`tel:${phoneNumber}`);
+    } else {
+      Alert.alert('خطأ', 'رقم الهاتف غير متاح');
+    }
+  };
+
   const filteredOrders = selectedStatus === 'all'
     ? orders
     : orders.filter(order => order.status === selectedStatus);
 
+  // حساب الإحصائيات من الطلبات الحالية
+  const stats = React.useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const activeOrders = orders.filter(o => ['pending', 'accepted', 'preparing', 'ready'].includes(o.status));
+    const urgentOrders = orders.filter(o => o.status === 'pending');
+    const preparingOrders = orders.filter(o => o.status === 'preparing');
+    
+    const todayOrders = orders.filter(o => {
+      const orderDate = new Date(o.created_at);
+      orderDate.setHours(0, 0, 0, 0);
+      return orderDate.getTime() === today.getTime();
+    });
+    
+    const todayRevenue = todayOrders
+      .filter(o => o.status === 'delivered')
+      .reduce((sum, o) => sum + (o.merchant_amount || o.product_total || 0), 0);
+    
+    return {
+      active: activeOrders.length,
+      urgent: urgentOrders.length,
+      preparing: preparingOrders.length,
+      todayRevenue: todayRevenue.toFixed(2),
+    };
+  }, [orders]);
+
+  const handleOpenMap = (latitude: number | string | null | undefined, longitude: number | string | null | undefined) => {
+    if (latitude && longitude) {
+      const lat = Number(latitude);
+      const lng = Number(longitude);
+      const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+      Linking.openURL(url).catch(() => {
+        Alert.alert('خطأ', 'لم نتمكن من فتح الخريطة');
+      });
+    } else {
+      Alert.alert('خطأ', 'موقع العميل غير متاح');
+    }
+  };
+
   const renderOrder = (order: Order) => (
     <View key={order.id} style={styles.orderCard}>
-      <View style={styles.orderHeader}>
-        <View>
-          <Text style={styles.orderNumber}>#{order.order_number || order.id.substring(0, 8)}</Text>
-          <Text style={styles.customerName}>{order.profiles?.full_name || 'عميل'}</Text>
+      {/* Gradient Header */}
+      <View style={[styles.gradientHeader, { backgroundColor: getStatusColor(order.status) + '15' }]}>
+        <View style={styles.headerTop}>
+          <Text style={styles.statusEmoji}>{getStatusIcon(order.status)}</Text>
+          <View style={[styles.statusPill, { backgroundColor: getStatusColor(order.status) }]}>
+            <Text style={styles.statusPillText}>{getStatusLabel(order.status)}</Text>
+          </View>
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) + '20' }]}>
-          <Text style={[styles.statusText, { color: getStatusColor(order.status) }]}>
-            {getStatusLabel(order.status)}
-          </Text>
+        <Text style={styles.orderNumber}>#{order.order_number || order.id.substring(0, 8)}</Text>
+        <Text style={styles.orderTime}>
+          {new Date(order.created_at).toLocaleDateString('ar-EG', { 
+            day: 'numeric', 
+            month: 'short',
+            hour: '2-digit',
+            minute: '2-digit'
+          })}
+        </Text>
+      </View>
+
+      {/* Customer & Contact Info */}
+      <View style={styles.customerSection}>
+        <View style={styles.customerRow}>
+          <View style={{ flex: 1 }}>
+            <View style={styles.nameRow}>
+              <Text style={styles.customerName}>{(order as any).customer?.full_name || order.profiles?.full_name || 'عميل'}</Text>
+              <View style={styles.roleBadge}><Text style={styles.roleBadgeText}>العميل</Text></View>
+            </View>
+            <Text style={styles.phoneNumber}>{(order as any).customer?.phone_number || order.profiles?.phone_number || 'غير متاح'}</Text>
+          </View>
+          <TouchableOpacity 
+            style={styles.iconButton}
+            onPress={() => handleCallCustomer((order as any).customer?.phone_number || order.profiles?.phone_number)}
+          >
+            <Text style={styles.iconButtonText}>📞</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
-      <View style={styles.orderDetails}>
-        <View style={styles.orderRow}>
-          <Text style={styles.orderLabel}>مستحقات المتجر:</Text>
-          <Text style={styles.orderValue}>
+      {/* Driver Info (if assigned and status allows) */}
+      {(SHOW_DRIVER_STATUSES.includes(order.status) && (((order as any).driver) || (order as any).driver_id)) && (
+        <View style={styles.customerSection}>
+          <View style={styles.customerRow}>
+            <View style={styles.rowLeft}>
+              {(((order as any).driver?.avatar_url) || (order as any).driver_avatar_url || (order as any).driver?.photo_url) ? (
+                <Image
+                  source={{ uri: (order as any).driver?.avatar_url || (order as any).driver_avatar_url || (order as any).driver?.photo_url }}
+                  style={styles.avatar}
+                />
+              ) : (
+                <View style={styles.avatarPlaceholder}><Text style={styles.avatarText}>🛵</Text></View>
+              )}
+              <View style={{ flex: 1 }}>
+                <View style={styles.nameRow}>
+                  <Text style={styles.customerName}>{(order as any).driver?.full_name || 'تم إسناد السائق'}</Text>
+                  <View style={styles.roleBadge}><Text style={styles.roleBadgeText}>السائق</Text></View>
+                </View>
+                <Text style={styles.phoneNumber}>{(order as any).driver?.phone_number || '—'}</Text>
+              </View>
+            </View>
+            <TouchableOpacity 
+              style={styles.iconButton}
+              onPress={() => handleCallCustomer((order as any).driver?.phone_number || '')}
+            >
+              <Text style={styles.iconButtonText}>📞</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Products - Compact */}
+      {order.order_items && order.order_items.length > 0 && (
+        <View style={styles.productsCompact}>
+          <Text style={styles.productsText}>
+            📦 {order.order_items.map((item: any) => 
+              `${item.merchant_products?.name_ar || item.merchant_products?.name || 'منتج'} (×${item.quantity})`
+            ).join(' • ')}
+          </Text>
+        </View>
+      )}
+
+      {/* Price & Location Row */}
+      <View style={styles.bottomRow}>
+        <View style={styles.priceCompact}>
+          <Text style={styles.priceLabel}>💰</Text>
+          <Text style={styles.priceValue}>
             {(() => {
-              // إذا كان merchant_amount موجود استخدمه
               if (order.merchant_amount != null && order.merchant_amount > 0) {
                 return order.merchant_amount.toFixed(2);
               }
-              // إذا كان product_total موجود
               if (order.product_total != null && order.product_total > 0) {
                 return ((order.product_total ?? 0) + (order.tax_amount ?? 0)).toFixed(2);
               }
-              // احسب من customer_total بخصم الرسوم
               const customerTotal = order.customer_total ?? order.total ?? 0;
               const deliveryFee = order.delivery_fee ?? 0;
               const serviceFee = order.service_fee ?? 0;
-              const merchantEarnings = customerTotal - deliveryFee - serviceFee;
-              return Math.max(0, merchantEarnings).toFixed(2);
-            })()} جنيه
+              return Math.max(0, customerTotal - deliveryFee - serviceFee).toFixed(2);
+            })()} ج
           </Text>
         </View>
-        <View style={styles.orderRow}>
-          <Text style={styles.orderLabel}>إجمالي العميل:</Text>
-          <Text style={styles.orderValue}>
-            {(order.customer_total ?? order.total ?? 0).toFixed(2)} جنيه
-          </Text>
-        </View>
-        <View style={styles.orderRow}>
-          <Text style={styles.orderLabel}>التاريخ:</Text>
-          <Text style={styles.orderValue}>
-            {new Date(order.created_at).toLocaleDateString('ar-EG')}
-          </Text>
-        </View>
-        <View style={styles.orderRow}>
-          <Text style={styles.orderLabel}>📞 الهاتف:</Text>
-          <Text style={styles.orderValue}>{order.profiles?.phone_number || 'غير متاح'}</Text>
-        </View>
-        {(order.delivery_address || (order.customer_latitude && order.customer_longitude)) && (
-          <View style={styles.orderRow}>
-            <Text style={styles.orderLabel}>📍 العنوان:</Text>
-            <Text style={styles.orderValue}>
-              {order.customer_latitude && order.customer_longitude
-                ? `موقع محدد: ${Number(order.customer_latitude).toFixed(4)}, ${Number(order.customer_longitude).toFixed(4)}`
-                : (typeof order.delivery_address === 'string' 
-                  ? order.delivery_address 
-                  : order.delivery_address?.street_address || '—')}
-            </Text>
-          </View>
-        )}
-        {/* ✅ عرض المنتجات */}
-        {order.order_items && order.order_items.length > 0 && (
-          <View style={styles.orderRow}>
-            <Text style={styles.orderLabel}>📦 المنتجات:</Text>
-            <View style={{ flex: 1 }}>
-              {order.order_items.map((item: any, index: number) => (
-                <Text key={item.id} style={styles.orderValue}>
-                  {item.products?.name || 'منتج'} ({item.quantity}×)
-                </Text>
-              ))}
-            </View>
-          </View>
+        
+        {(order.customer_latitude && order.customer_longitude) && (
+          <TouchableOpacity 
+            style={styles.locationCompact}
+            onPress={() => handleOpenMap(order.customer_latitude, order.customer_longitude)}
+          >
+            <Text style={styles.locationIcon}>📍</Text>
+            <Text style={styles.locationTextCompact}>عرض الموقع</Text>
+          </TouchableOpacity>
         )}
       </View>
+
+
 
       {order.status === 'pending' && (
         <View style={styles.actionsContainer}>
           <TouchableOpacity
             style={[styles.actionButton, styles.rejectButton]}
-            onPress={() => updateOrderStatus(order.id, 'rejected')}
+            onPress={() => updateOrderStatus(order.id, 'cancelled')}
           >
             <XCircle size={16} color={colors.white} />
             <Text style={styles.actionButtonText}>رفض</Text>
@@ -340,29 +595,70 @@ export default function MerchantOrders() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>الطلبات ({filteredOrders.length})</Text>
+        <Text style={styles.headerTitle}>الطلبات ({orders.length})</Text>
         <StoreButton />
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.statusFilter}>
-        {ORDER_STATUSES.map((status) => (
-          <TouchableOpacity
-            key={status.value}
-            style={[
-              styles.statusFilterButton,
-              selectedStatus === status.value && styles.statusFilterButtonActive
-            ]}
-            onPress={() => setSelectedStatus(status.value)}
-          >
-            <Text style={[
-              styles.statusFilterText,
-              selectedStatus === status.value && styles.statusFilterTextActive
-            ]}>
-              {status.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      {/* Statistics Cards */}
+      <View style={styles.statsSection}>
+        <Text style={styles.statsSectionTitle}>📊 نظرة سريعة</Text>
+        <View style={styles.statsContainer}>
+          <View style={[styles.statCard, { backgroundColor: colors.success + '15' }]}>
+            <Text style={styles.statIcon}>🟢</Text>
+            <Text style={styles.statValue}>{stats.active}</Text>
+            <Text style={styles.statLabel}>نشطة</Text>
+          </View>
+          
+          <View style={[styles.statCard, { backgroundColor: colors.warning + '15' }]}>
+            <Text style={styles.statIcon}>⚡</Text>
+            <Text style={styles.statValue}>{stats.urgent}</Text>
+            <Text style={styles.statLabel}>عاجلة</Text>
+          </View>
+          
+          <View style={[styles.statCard, { backgroundColor: colors.primary + '15' }]}>
+            <Text style={styles.statIcon}>👨‍🍳</Text>
+            <Text style={styles.statValue}>{stats.preparing}</Text>
+            <Text style={styles.statLabel}>قيد التحضير</Text>
+          </View>
+          
+          <View style={[styles.statCard, { backgroundColor: colors.secondary + '15' }]}>
+            <Text style={styles.statIcon}>💰</Text>
+            <Text style={styles.statValue}>{stats.todayRevenue}</Text>
+            <Text style={styles.statLabel}>اليوم (ج)</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.statusFilter}>
+        {ORDER_STATUSES.map((status) => {
+          const count = status.value === 'all' 
+            ? orders.length 
+            : orders.filter(o => o.status === status.value).length;
+          
+          return (
+            <TouchableOpacity
+              key={status.value}
+              style={[
+                styles.miniCard,
+                selectedStatus === status.value && styles.miniCardActive
+              ]}
+              onPress={() => setSelectedStatus(status.value)}
+            >
+              <Text style={styles.miniCardCount}>{count}</Text>
+              <Text style={styles.miniCardIcon}>{status.icon}</Text>
+              <Text style={[
+                styles.miniCardLabel,
+                selectedStatus === status.value && styles.miniCardLabelActive
+              ]}>
+                {status.label}
+              </Text>
+              {selectedStatus === status.value && (
+                <View style={styles.miniCardUnderline} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
       <ScrollView
         style={styles.content}
@@ -387,53 +683,258 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.lg, backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.border },
   headerTitle: { ...typography.h2, color: colors.text },
+  statsSection: {
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  statsSectionTitle: {
+    ...typography.bodyMedium,
+    color: colors.textLight,
+    marginBottom: spacing.md,
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  statCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
+    borderRadius: borderRadius.lg,
+  },
+  statIcon: {
+    fontSize: 24,
+    marginBottom: spacing.xs,
+  },
+  statValue: {
+    ...typography.h3,
+    color: colors.text,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
+  },
+  statLabel: {
+    ...typography.caption,
+    color: colors.textLight,
+    textAlign: 'center',
+  },
   statusFilter: {
+    flexDirection: 'row',
     backgroundColor: colors.white,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.md,
+    justifyContent: 'space-around',
   },
-  statusFilterButton: {
-    paddingHorizontal: spacing.md,
+  miniCard: {
+    alignItems: 'center',
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
-    borderRadius: borderRadius.lg,
-    marginRight: spacing.sm,
+    minWidth: 60,
+    position: 'relative',
+  },
+  miniCardActive: {
     backgroundColor: colors.background,
+    borderRadius: borderRadius.md,
   },
-  statusFilterButtonActive: {
-    backgroundColor: colors.primary,
-  },
-  statusFilterText: {
-    ...typography.body,
+  miniCardCount: {
+    ...typography.h3,
     color: colors.text,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
   },
-  statusFilterTextActive: {
-    color: colors.white,
+  miniCardIcon: {
+    fontSize: 20,
+    marginBottom: spacing.xs,
+  },
+  miniCardLabel: {
+    ...typography.caption,
+    color: colors.textLight,
+    fontSize: 11,
+  },
+  miniCardLabelActive: {
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  miniCardUnderline: {
+    position: 'absolute',
+    bottom: 0,
+    left: spacing.sm,
+    right: spacing.sm,
+    height: 3,
+    backgroundColor: colors.primary,
+    borderRadius: 2,
   },
   content: { flex: 1, padding: spacing.lg },
   orderCard: {
     backgroundColor: colors.white,
     borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
+    overflow: 'hidden',
     borderWidth: 1,
     borderColor: colors.border,
   },
-  orderHeader: {
+  gradientHeader: {
+    padding: spacing.sm,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border + '50',
+  },
+  headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: spacing.md,
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  statusEmoji: {
+    fontSize: 28,
+  },
+  statusPill: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.lg,
+  },
+  statusPillText: {
+    ...typography.caption,
+    color: colors.white,
+    fontWeight: '700',
   },
   orderNumber: {
-    ...typography.h3,
+    ...typography.h2,
     color: colors.text,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
+  },
+  orderTime: {
+    ...typography.body,
+    color: colors.textLight,
+  },
+  customerSection: {
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.background + '80',
+  },
+  customerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
   },
   customerName: {
     ...typography.body,
+    color: colors.text,
+    fontWeight: '600',
+    marginBottom: spacing.xs,
+  },
+  roleBadge: {
+    backgroundColor: colors.textLight + '20',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  roleBadgeText: {
+    ...typography.caption,
     color: colors.textLight,
-    marginTop: spacing.xs,
+    fontWeight: '600',
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary + '15',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  iconButtonText: {
+    fontSize: 18,
+  },
+  phoneNumber: {
+    ...typography.caption,
+    color: colors.textLight,
+  },
+  rowLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: spacing.sm,
+  },
+  avatarPlaceholder: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  avatarText: {
+    fontSize: 18,
+  },
+  productsCompact: {
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.primary + '08',
+  },
+  productsText: {
+    ...typography.caption,
+    color: colors.text,
+    lineHeight: 18,
+  },
+  bottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.success + '10',
+  },
+  priceCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  priceLabel: {
+    fontSize: 18,
+  },
+  priceValue: {
+    ...typography.bodyMedium,
+    color: colors.success,
+    fontWeight: '700',
+  },
+  locationCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.md,
+  },
+  locationIcon: {
+    fontSize: 16,
+  },
+  locationTextCompact: {
+    ...typography.caption,
+    color: colors.white,
+    fontWeight: '600',
   },
   statusBadge: {
     paddingHorizontal: spacing.sm,
@@ -443,22 +944,6 @@ const styles = StyleSheet.create({
   statusText: {
     ...typography.caption,
     fontWeight: '600',
-  },
-  orderDetails: {
-    marginBottom: spacing.md,
-  },
-  orderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.xs,
-  },
-  orderLabel: {
-    ...typography.body,
-    color: colors.textLight,
-  },
-  orderValue: {
-    ...typography.bodyMedium,
-    color: colors.text,
   },
   actionsContainer: {
     flexDirection: 'row',

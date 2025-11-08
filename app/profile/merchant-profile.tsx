@@ -17,6 +17,7 @@ import {
   MapPin,
   Phone,
   Clock,
+  Edit3,
 } from 'lucide-react-native';
 import { Linking } from 'react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
@@ -634,7 +635,7 @@ export default function MerchantProfileScreen() {
         <View style={styles.profileCard}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatar}>
-              <Store size={32} color={colors.white} />
+              <Store size={30} color={colors.white} />
             </View>
           </View>
           
@@ -725,11 +726,22 @@ export default function MerchantProfileScreen() {
           <View style={styles.sectionHeader}>
             <Store size={20} color={colors.primary} />
             <Text style={styles.sectionTitle}>معلومات المتجر</Text>
-            {!editing && (
-              <TouchableOpacity style={styles.editBtn} onPress={() => setEditing(true)}>
-                <Text style={styles.editBtnText}>تعديل</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity 
+              style={styles.editBtn} 
+              onPress={() => {
+                if (isAllStoresSelected) {
+                  Alert.alert(
+                    'اختر متجراً',
+                    'الرجاء اختيار متجر محدد لتعديل معلوماته',
+                    [{ text: 'حسناً' }]
+                  );
+                } else {
+                  router.push(`/merchant/edit-store/${merchantProfile.id}`);
+                }
+              }}
+            >
+              <Text style={styles.editBtnText}>تعديل</Text>
+            </TouchableOpacity>
           </View>
           
           <View style={styles.infoRow}>

@@ -6,13 +6,12 @@ RETURNS TRIGGER AS $$
 BEGIN
   -- فقط عندما يتغير الـ status من pending إلى accepted
   IF OLD.status = 'pending' AND NEW.status = 'accepted' THEN
-    -- تحديث كميات المنتجات
-    UPDATE products p
-    SET quantity = p.quantity - oi.quantity
+    -- تحديث مخزون المنتجات من جدول merchant_products (اعتمدنا stock بدلاً من quantity)
+    UPDATE merchant_products mp
+    SET stock = GREATEST(0, COALESCE(mp.stock, 0) - oi.quantity)
     FROM order_items oi
     WHERE oi.order_id = NEW.id
-      AND oi.product_id = p.id
-      AND p.quantity >= oi.quantity;  -- تأكد من وجود كمية كافية
+      AND oi.product_id = mp.id;
     
     -- Log للتتبع
     RAISE NOTICE 'Updated product quantities for order %', NEW.id;

@@ -43,6 +43,8 @@ export default function OrdersScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'active' | 'completed'>('active');
+  const fetchingRef = React.useRef(false);
+  const lastFetchAtRef = React.useRef(0);
 
   const styles = useMemo(() => createStyles(theme), [theme]);
 
@@ -93,6 +95,12 @@ export default function OrdersScreen() {
       return;
     }
 
+    const now = Date.now();
+    if (fetchingRef.current) return;
+    if (now - lastFetchAtRef.current < 800) return; // throttle repeated calls
+    fetchingRef.current = true;
+    lastFetchAtRef.current = now;
+
     console.log('🔍 Fetching orders for user:', user.id);
     console.log('🔍 Active tab:', activeTab);
 
@@ -133,6 +141,7 @@ export default function OrdersScreen() {
     
     setLoading(false);
     setRefreshing(false);
+    fetchingRef.current = false;
   };
 
   const onRefresh = () => {

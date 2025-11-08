@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+import { useSettings } from '../contexts/SettingsContext';
 import { useOrders } from '../hooks/useSupabaseData';
 import OrderDetailsModal from '../components/OrderDetailsModal';
 import AddOrderModal from '../components/AddOrderModal';
@@ -22,6 +24,9 @@ const ORDER_STATUS = [
 ];
 
 const OrdersPage = () => {
+  const location = useLocation();
+  const { app, currency } = useSettings();
+  const maintenance = app?.maintenance_mode === true;
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -192,6 +197,17 @@ const OrdersPage = () => {
     setCurrentPage(1);
   }, [statusFilter, searchTerm]);
 
+  // Sync filters from URL query params (e.g., /orders?status=pending&q=123)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const s = params.get('status');
+    if (s && ORDER_STATUS.some(os => os.key === s)) {
+      setStatusFilter(s);
+    }
+    const q = params.get('q');
+    if (q !== null) setSearchTerm(q);
+  }, [location.search]);
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -217,7 +233,7 @@ const OrdersPage = () => {
             {t('exportReport')}
           </button>
           {hasPermission(PERMISSIONS.MANAGE_ORDERS) && (
-            <button className="btn-primary" onClick={() => setIsAddModalOpen(true)}>
+            <button className={`btn-primary ${maintenance ? 'opacity-50 cursor-not-allowed' : ''}`} onClick={() => !maintenance && setIsAddModalOpen(true)} disabled={maintenance}>
               {t('addOrder')}
             </button>
           )}
@@ -271,14 +287,16 @@ const OrdersPage = () => {
           </div>
           <div className="flex space-x-2 space-x-reverse">
             <button 
-              className="btn-secondary"
-              onClick={() => handleBulkAction('mark_as_delivered')}
+              className={`btn-secondary ${maintenance ? 'opacity-50 cursor-not-allowed' : ''}`}
+              onClick={() => !maintenance && handleBulkAction('mark_as_delivered')}
+              disabled={maintenance}
             >
               تحديد كـ "تم التوصيل"
             </button>
             <button 
-              className="btn-danger"
-              onClick={() => handleBulkAction('cancel')}
+              className={`btn-danger ${maintenance ? 'opacity-50 cursor-not-allowed' : ''}`}
+              onClick={() => !maintenance && handleBulkAction('cancel')}
+              disabled={maintenance}
             >
               إلغاء الطلبات المحددة
             </button>
@@ -394,7 +412,7 @@ const OrdersPage = () => {
                       <div className="text-sm text-gray-900">{order.customer_id}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{order.total.toFixed(2)} ر.س</div>
+                      <div className="text-sm text-gray-900">{order.total.toFixed(2)} {currency}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(order.status)}`}>
@@ -413,10 +431,10 @@ const OrdersPage = () => {
                       </button>
                       {hasPermission(PERMISSIONS.MANAGE_ORDERS) && (
                         <>
-                          <button className="text-green-600 hover:text-green-900 mr-4">
+                          <button className={`text-green-600 hover:text-green-900 mr-4 ${maintenance ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={maintenance}>
                             {t('edit')}
                           </button>
-                          <button className="text-red-600 hover:text-red-900 mr-4" onClick={() => handleDeleteOrder(order.id)}>
+                          <button className={`text-red-600 hover:text-red-900 mr-4 ${maintenance ? 'opacity-50 cursor-not-allowed' : ''}`} onClick={() => !maintenance && handleDeleteOrder(order.id)} disabled={maintenance}>
                             {t('delete')}
                           </button>
                         </>

@@ -7,12 +7,17 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  TextInput,
+  Modal,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { Linking } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
-import { ArrowLeft, MapPin, Clock, Phone, MessageCircle, Star, Check, User, Car } from 'lucide-react-native';
+import { ArrowLeft, MapPin, Clock, Phone, MessageCircle, Star, Check, User, Car, AlertTriangle } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 
 interface Order {
@@ -21,12 +26,15 @@ interface Order {
   customer_id: string;
   status: string;
   total: number;
+  subtotal?: number | null;
   product_total?: number | null;
   delivery_fee?: number | null;
   service_fee?: number | null;
+  tax?: number | null;
   tax_amount?: number | null;
+  discount?: number | null;
   customer_total?: number | null;
-  payment_method?: 'online' | 'cod' | string;
+  payment_method?: 'online' | 'cod' | 'cash' | 'card' | 'wallet' | string;
   created_at: string;
   estimated_delivery_time?: string;
   actual_delivery_time?: string;
@@ -36,6 +44,7 @@ interface Order {
     street_address?: string;
     city?: string;
   };
+
   merchant?: {
     name_ar?: string;
     logo_url?: string;
@@ -84,6 +93,94 @@ export default function OrderDetailScreen() {
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [orderDiscounts, setOrderDiscounts] = useState<{ id: string; amount: number; details: any; promotion_id: string | null }[]>([]);
+  const [complaintModalVisible, setComplaintModalVisible] = useState(false);
+  const [complaintTitle, setComplaintTitle] = useState('');
+  const [complaintDescription, setComplaintDescription] = useState('');
+  const [complaintImages, setComplaintImages] = useState<string[]>([]);
+
+  // Complaint helpers (inside component to access state)
+  const pickComplaintImage = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('إذن الصور', 'يرجى السماح للتطبيق بالوصول إلى الصور لإرفاق لقطات.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets && result.assets[0]?.uri) {
+        setComplaintImages((prev: string[]) => [...prev, result.assets[0].uri]);
+      }
+    } catch (e) {
+      console.error('pick complaint image error', e);
+      Alert.alert('خطأ', 'تعذر اختيار الصورة');
+    }
+  };
+
+  const removeComplaintImage = (idx: number) => {
+    setComplaintImages((prev: string[]) => prev.filter((_: string, i: number) => i !== idx));
+  };
+
+  const submitComplaint = async () => {
+    try {
+      if (!user || !order || !profile) {
+        Alert.alert('خطأ', 'المستخدم غير معرف');
+        return;
+      }
+      if (!complaintTitle.trim()) {
+        Alert.alert('تنبيه', 'يرجى إدخال عنوان الشكوى');
+        return;
+      }
+      // 1) Create complaint
+      const { data: compId, error: compErr } = await supabase.rpc('submit_complaint', {
+        p_user_role: profile.user_type,
+        p_target_type: 'order',
+        p_target_id: order.id,
+        p_title: complaintTitle.trim(),
+        p_description: complaintDescription.trim(),
+        p_priority: 'medium',
+      });
+      if (compErr) throw compErr;
+      const complaintId: string = compId as unknown as string;
+
+      // 2) Upload attachments (if any)
+      for (const uri of complaintImages) {
+        try {
+          const resp = await fetch(uri);
+          const arrayBuffer = await resp.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
+          const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
+          const contentType = ext === 'png' ? 'image/png' : 'image/jpeg';
+          const fileName = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+          const objectPath = `${user.id}/complaints/${complaintId}/${fileName}`;
+          const { error: upErr } = await supabase.storage
+            .from('complaint-images')
+            .upload(objectPath, bytes, { contentType, cacheControl: '3600', upsert: false });
+          if (upErr) throw upErr;
+          // record attachment row
+          const { error: attErr } = await supabase
+            .from('complaint_attachments')
+            .insert({ complaint_id: complaintId, object_path: objectPath, created_by: user.id });
+          if (attErr) throw attErr;
+        } catch (e) {
+          console.error('upload attachment error', e);
+        }
+      }
+
+      Alert.alert('تم الإرسال', 'تم إرسال الشكوى وسيتم مراجعتها.');
+      setComplaintModalVisible(false);
+      setComplaintTitle('');
+      setComplaintDescription('');
+      setComplaintImages([]);
+    } catch (e: any) {
+      console.error('submit complaint error', e);
+      Alert.alert('خطأ', e?.message || 'تعذر إرسال الشكوى');
+    }
+  };
 
   useEffect(() => {
     // Validate that id exists and is a string
@@ -262,6 +359,13 @@ export default function OrderDetailScreen() {
       customer_id: orderData.customer_id,
       status: orderData.status,
       total: orderData.total,
+      subtotal: orderData.subtotal ?? orderData.product_total ?? null,
+      delivery_fee: orderData.delivery_fee ?? null,
+      service_fee: orderData.service_fee ?? null,
+      tax: orderData.tax ?? orderData.tax_amount ?? null,
+      tax_amount: orderData.tax_amount ?? orderData.tax ?? null,
+      discount: orderData.discount ?? null,
+      customer_total: orderData.customer_total ?? null,
       created_at: orderData.created_at,
       estimated_delivery_time: orderData.estimated_delivery_time,
       actual_delivery_time: orderData.actual_delivery_time,
@@ -279,20 +383,51 @@ export default function OrderDetailScreen() {
 
     setOrder(formattedOrder);
 
-    // Fetch order items with product names
-    const { data: itemsData, error: itemsError } = await supabase
-      .from('order_items')
-      .select('id, product_id, quantity, price, total, product:products(name)')
-      .eq('order_id', id);
+    // Fetch order items with product names (support merchant_products schema and legacy/new columns)
+    let itemsData: any[] | null = null;
+    let itemsError: any = null;
 
-    if (itemsError) throw itemsError;
+    const trySelect = async (selectStr: string) => {
+      return await supabase
+        .from('order_items')
+        .select(selectStr)
+        .eq('order_id', id as string);
+    };
+
+    // 1) Try new schema columns with primary FK name (name_ar only)
+    let resp = await trySelect('id, product_id, quantity, price, total, product:merchant_products!order_items_product_id_fkey(name_ar)');
+
+    // 2) If error, try new schema with alternate FK name
+    if (resp.error) {
+      const msg = resp.error.message || '';
+      const code = resp.error.code || '';
+      const unknownCol = code === '42703' || /column .* does not exist/i.test(msg);
+      if (!unknownCol) {
+        resp = await trySelect('id, product_id, quantity, price, total, product:merchant_products!order_items_product_fk(name_ar)');
+      }
+    }
+
+    // 3) If still error (or unknown columns), try legacy columns with primary FK
+    if (resp.error) {
+      resp = await trySelect('id, product_id, quantity, price:unit_price, total:total_price, product:merchant_products!order_items_product_id_fkey(name_ar)');
+      // 4) If still error, try legacy columns with alternate FK
+      if (resp.error) {
+        resp = await trySelect('id, product_id, quantity, price:unit_price, total:total_price, product:merchant_products!order_items_product_fk(name_ar)');
+      }
+    }
+
+    if (resp.error) {
+      itemsError = resp.error;
+      throw itemsError;
+    }
+    itemsData = resp.data as any[] | null;
     
     // Format items with product names
     const formattedItems = (itemsData || []).map(item => {
-      const product = Array.isArray(item.product) ? item.product[0] : item.product;
+      const p = Array.isArray(item.product) ? item.product[0] : item.product;
       return {
         id: item.id,
-        product_name_ar: product?.name || 'منتج',
+        product_name_ar: p?.name_ar || p?.name || 'منتج',
         quantity: item.quantity,
         price: item.price,
         total: item.total,
@@ -300,6 +435,21 @@ export default function OrderDetailScreen() {
     });
     
     setOrderItems(formattedItems);
+
+    // Fetch detailed discount breakdowns (if any)
+    try {
+      const { data: discountsData, error: discountsError } = await supabase
+        .from('order_discounts')
+        .select('id, amount, details, promotion_id')
+        .eq('order_id', id as string);
+      if (discountsError) {
+        console.warn('Warning loading order_discounts:', discountsError.message);
+      } else {
+        setOrderDiscounts(discountsData || []);
+      }
+    } catch (e) {
+      console.warn('Warning loading order_discounts (exception):', (e as any)?.message);
+    }
   } catch (error) {
     console.error('Error fetching order details:', error);
     Alert.alert('خطأ', 'حدث خطأ أثناء تحميل تفاصيل الطلب');
@@ -650,20 +800,88 @@ export default function OrderDetailScreen() {
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر المنتجات</Text>
-            <Text style={styles.summaryValue}>{(order.product_total ?? Math.max(0, order.total - ((order.delivery_fee ?? 0) + (order.service_fee ?? 0) + (order.tax_amount ?? 0)))).toFixed(2)} جنيه</Text>
+            <Text style={styles.summaryValue}>
+              {(() => {
+                // إذا كان subtotal موجود ولا يساوي 0، استخدمه
+                if (order.subtotal && order.subtotal > 0) {
+                  return order.subtotal.toFixed(2);
+                }
+                // وإلا احسبه من order_items
+                const itemsTotal = orderItems.reduce((sum, item) => sum + (item.total || 0), 0);
+                return itemsTotal > 0 ? itemsTotal.toFixed(2) : '0.00';
+              })()} جنيه
+            </Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر التوصيل</Text>
-            <Text style={styles.summaryValue}>{(order.delivery_fee ?? 0).toFixed(2)} جنيه</Text>
+            <Text style={styles.summaryValue}>
+              {(() => {
+                // إذا كانت الرسوم موجودة، استخدمها
+                if (order.delivery_fee && order.delivery_fee > 0) {
+                  return order.delivery_fee.toFixed(2);
+                }
+                // للطلبات القديمة: افترض 10 جنيه (القيمة الافتراضية)
+                const itemsTotal = orderItems.reduce((sum, item) => sum + (item.total || 0), 0);
+                const feesTotal = order.total - itemsTotal;
+                return feesTotal > 0 ? '10.00' : '0.00';
+              })()} جنيه
+            </Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>رسوم الخدمة</Text>
-            <Text style={styles.summaryValue}>{(order.service_fee ?? 0).toFixed(2)} جنيه</Text>
+            <Text style={styles.summaryValue}>
+              {(() => {
+                if (order.service_fee && order.service_fee > 0) {
+                  return order.service_fee.toFixed(2);
+                }
+                // للطلبات القديمة: افترض 2.5 جنيه
+                const itemsTotal = orderItems.reduce((sum, item) => sum + (item.total || 0), 0);
+                const feesTotal = order.total - itemsTotal;
+                return feesTotal > 0 ? '2.50' : '0.00';
+              })()} جنيه
+            </Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>الضريبة</Text>
-            <Text style={styles.summaryValue}>{(order.tax_amount ?? 0).toFixed(2)} جنيه</Text>
+            <Text style={styles.summaryValue}>
+              {(() => {
+                const tax = order.tax ?? order.tax_amount ?? 0;
+                if (tax > 0) {
+                  return tax.toFixed(2);
+                }
+                // للطلبات القديمة: افترض 1.5 جنيه
+                const itemsTotal = orderItems.reduce((sum, item) => sum + (item.total || 0), 0);
+                const feesTotal = order.total - itemsTotal;
+                return feesTotal > 0 ? '1.50' : '0.00';
+              })()} جنيه
+            </Text>
           </View>
+          {(order.discount ?? 0) > 0 && (
+            <View style={styles.summaryRow}>
+              <Text style={[styles.summaryLabel, { color: colors.success }]}>الخصم</Text>
+              <Text style={[styles.summaryValue, { color: colors.success }]}>-{(order.discount ?? 0).toFixed(2)} جنيه</Text>
+            </View>
+          )}
+          {orderDiscounts.length > 0 && (
+            <View style={{ marginTop: 4 }}>
+              {orderDiscounts.map((d) => {
+                const details = d?.details || {};
+                const applyOn = details.apply_on || details.applyOn || 'order_total';
+                const isAd = details.source === 'apply_ad_discount_if_eligible' || (details.source === 'apply_quote_v3_to_order' && !!details.ad_id);
+                const source = isAd ? 'خصم إعلان ممول' : 'عرض ترويجي';
+                const applyOnLabel =
+                  applyOn === 'delivery_fee' ? 'رسوم التوصيل' :
+                  applyOn === 'service_fee' ? 'رسوم الخدمة' :
+                  applyOn === 'merchant_commission' ? 'عمولة التاجر' : 'قيمة الطلب';
+                return (
+                  <View key={d.id} style={[styles.summaryRow, { paddingVertical: 2 }]}>
+                    <Text style={[styles.summaryLabel, { color: colors.textLight }]}>{source} • {applyOnLabel}</Text>
+                    <Text style={[styles.summaryValue, { color: colors.success }]}>-{Number(d.amount || 0).toFixed(2)} جنيه</Text>
+                  </View>
+                );
+              })}
+            </View>
+          )}
           <View style={[styles.summaryRow, styles.totalRow]}>
             <Text style={styles.totalLabel}>المجموع الإجمالي</Text>
             <Text style={styles.totalValue}>{(order.customer_total ?? order.total).toFixed(2)} جنيه</Text>
@@ -710,6 +928,76 @@ export default function OrderDetailScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Floating Complaint FAB */}
+      <TouchableOpacity style={styles.fab} onPress={() => setComplaintModalVisible(true)}>
+        <AlertTriangle size={20} color={colors.white} />
+        <Text style={styles.fabText}>إبلاغ عن مشكلة</Text>
+      </TouchableOpacity>
+
+      {/* Complaint Modal */}
+      <Modal
+        visible={complaintModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setComplaintModalVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>إبلاغ عن مشكلة في الطلب #{order?.order_number}</Text>
+                  <TouchableOpacity onPress={() => setComplaintModalVisible(false)}>
+                    <Text style={styles.secondaryButtonText}>إغلاق</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TextInput
+                  style={styles.input}
+                  placeholder="عنوان الشكوى"
+                  placeholderTextColor={colors.textLight}
+                  value={complaintTitle}
+                  onChangeText={setComplaintTitle}
+                />
+                <TextInput
+                  style={styles.textarea}
+                  placeholder="وصف المشكلة (اختياري)"
+                  placeholderTextColor={colors.textLight}
+                  multiline
+                  numberOfLines={4}
+                  value={complaintDescription}
+                  onChangeText={setComplaintDescription}
+                />
+
+                {/* Images row */}
+                <View style={styles.imagesRow}>
+                  {complaintImages.map((uri, idx) => (
+                    <View key={idx} style={{ position: 'relative' }}>
+                      <Image source={{ uri }} style={styles.imageThumb} />
+                      <TouchableOpacity style={styles.removeImg} onPress={() => removeComplaintImage(idx)}>
+                        <Text style={{ color: colors.white }}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <TouchableOpacity style={[styles.imageThumb, { justifyContent: 'center', alignItems: 'center', backgroundColor: colors.lightGray }]} onPress={pickComplaintImage}>
+                    <Text style={{ color: colors.textLight }}>+</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity style={[styles.secondaryButton]} onPress={() => setComplaintModalVisible(false)}>
+                    <Text style={styles.secondaryButtonText}>إلغاء</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.primaryButton]} onPress={submitComplaint}>
+                    <Text style={styles.primaryButtonText}>إرسال الشكوى</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </View>
   );
 }
@@ -1084,5 +1372,119 @@ const styles = StyleSheet.create({
   chatText: {
     ...typography.bodyMedium,
     color: colors.primary,
+  },
+  fab: {
+    position: 'absolute',
+    right: spacing.md,
+    bottom: spacing.xxl,
+    backgroundColor: colors.primary,
+    borderRadius: 28,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    ...shadows.small,
+  },
+  fabText: {
+    ...typography.body,
+    color: colors.white,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.md,
+  },
+  modalContent: {
+    width: '100%',
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  modalTitle: {
+    ...typography.bodyMedium,
+    color: colors.text,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  textarea: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+    color: colors.text,
+    minHeight: 100,
+    textAlignVertical: 'top',
+    marginBottom: spacing.sm,
+  },
+  imagesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  imageThumb: {
+    width: 64,
+    height: 64,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  removeImg: {
+    position: 'absolute',
+    top: -6,
+    left: -6,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  primaryButton: {
+    flex: 1,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  primaryButtonText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    fontWeight: '600',
+  },
+  secondaryButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    alignItems: 'center',
+    backgroundColor: colors.white,
+  },
+  secondaryButtonText: {
+    ...typography.bodyMedium,
+    color: colors.text,
   },
 });

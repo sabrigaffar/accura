@@ -21,6 +21,7 @@ import {
   DollarSign,
   Bell,
   MessageSquare,
+  AlertCircle,
 } from 'lucide-react-native';
 import { spacing, typography, borderRadius } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -230,16 +231,25 @@ export default function DriverSettings() {
       onPress: sendTestNotification,
     },
     {
+      icon: Trash2,
+      title: 'مسح الكاش',
+      description: 'حذف البيانات المؤقتة',
+      onPress: handleClearCache,
+    },
+  ];
+
+  const supportSettings = [
+    {
       icon: MessageSquare,
       title: 'الدعم الفني',
       description: 'تواصل مع فريق الدعم',
       onPress: () => router.push('/support/tickets' as any),
     },
     {
-      icon: Trash2,
-      title: 'مسح الكاش',
-      description: 'حذف البيانات المؤقتة',
-      onPress: handleClearCache,
+      icon: AlertCircle,
+      title: 'الشكاوى',
+      description: 'عرض وإدارة شكاويك',
+      onPress: () => router.push('/profile/complaints' as any),
     },
   ];
 
@@ -297,6 +307,32 @@ export default function DriverSettings() {
                 style={[
                   styles.settingItem,
                   index === actionSettings.length - 1 && styles.lastItem,
+                ]}
+                onPress={item.onPress}
+              >
+                <View style={styles.settingIcon}>
+                  <item.icon size={20} color={theme.primary} />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>{item.title}</Text>
+                  <Text style={styles.settingDescription}>{item.description}</Text>
+                </View>
+                <ChevronRight size={20} color={theme.textLight} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Support Settings */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>الدعم</Text>
+          <View style={styles.card}>
+            {supportSettings.map((item, index) => (
+              <TouchableOpacity
+                key={index}
+                style={[
+                  styles.settingItem,
+                  index === supportSettings.length - 1 && styles.lastItem,
                 ]}
                 onPress={item.onPress}
               >

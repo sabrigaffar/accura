@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { useSettings } from '../contexts/SettingsContext';
 
 interface OrderItem {
   id: string;
@@ -43,6 +44,7 @@ const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({ isOpen, onClose, 
   const [order, setOrder] = useState<OrderData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { currency } = useSettings();
 
   useEffect(() => {
     if (isOpen && orderId) {
@@ -73,10 +75,32 @@ const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({ isOpen, onClose, 
         .eq('order_id', orderId);
       
       if (itemsError) throw itemsError;
+
+      // تطبيع البيانات لدعم المخططين القديم والجديد
+      const normalizedItems = (itemsData || []).map((it: any) => {
+        const name = it.product_name ?? it.product_name_ar ?? 'منتج';
+        const unitPrice = (typeof it.price === 'number' ? it.price : parseFloat(it.price))
+          ?? (typeof it.unit_price === 'number' ? it.unit_price : parseFloat(it.unit_price))
+          ?? 0;
+        const qty = typeof it.quantity === 'number' ? it.quantity : parseInt(it.quantity, 10) || 0;
+        const totalVal = (typeof it.total === 'number' ? it.total : parseFloat(it.total))
+          ?? (typeof it.total_price === 'number' ? it.total_price : parseFloat(it.total_price))
+          ?? (unitPrice * qty);
+        return {
+          id: it.id,
+          order_id: it.order_id,
+          product_name: name,
+          quantity: qty,
+          price: unitPrice,
+          // نحتفظ بباقي الحقول داخل الكائن إذا لزم لاحقاً
+          ...it,
+          total: totalVal,
+        } as any;
+      });
       
       setOrder({
         ...orderData,
-        items: itemsData || []
+        items: normalizedItems
       });
     } catch (err: any) {
       setError(err.message || 'حدث خطأ أثناء جلب تفاصيل الطلب');
@@ -143,7 +167,7 @@ const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({ isOpen, onClose, 
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">المجموع</p>
-                  <p className="font-medium">{order.total.toFixed(2)} ر.س</p>
+                  <p className="font-medium">{order.total.toFixed(2)} {currency}</p>
                 </div>
               </div>
             </div>
@@ -158,7 +182,7 @@ const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({ isOpen, onClose, 
                       <p className="font-medium">{item.product_name}</p>
                       <p className="text-sm text-gray-500">الكمية: {item.quantity}</p>
                     </div>
-                    <p className="font-medium">{(item.price * item.quantity).toFixed(2)} ر.س</p>
+                    <p className="font-medium">{(item.price * item.quantity).toFixed(2)} {currency}</p>
                   </div>
                 ))}
               </div>

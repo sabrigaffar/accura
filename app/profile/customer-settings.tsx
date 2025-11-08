@@ -17,6 +17,7 @@ import {
   MapPin,
   Trash2,
   ChevronRight,
+  AlertCircle,
 } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 
@@ -104,6 +105,15 @@ export default function CustomerSettings() {
     },
   ];
 
+  const supportSettings = [
+    {
+      icon: AlertCircle,
+      title: 'الشكاوى',
+      description: 'عرض وإدارة شكاويك',
+      onPress: () => router.push('/profile/complaints' as any),
+    },
+  ];
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
@@ -154,9 +164,9 @@ export default function CustomerSettings() {
           </View>
         </View>
 
-        {/* Action Settings */}
+        {/* Other Settings */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>خيارات أخرى</Text>
+          <Text style={styles.sectionTitle}>إعدادات أخرى</Text>
           <View style={styles.card}>
             {actionSettings.map((item, index) => (
               <TouchableOpacity
@@ -164,6 +174,32 @@ export default function CustomerSettings() {
                 style={[
                   styles.settingItem,
                   index === actionSettings.length - 1 && styles.lastItem,
+                ]}
+                onPress={item.onPress}
+              >
+                <View style={styles.settingIcon}>
+                  <item.icon size={20} color={colors.primary} />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>{item.title}</Text>
+                  <Text style={styles.settingDescription}>{item.description}</Text>
+                </View>
+                <ChevronRight size={20} color={colors.textLight} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Support Settings */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>الدعم</Text>
+          <View style={styles.card}>
+            {supportSettings.map((item, index) => (
+              <TouchableOpacity
+                key={index}
+                style={[
+                  styles.settingItem,
+                  index === supportSettings.length - 1 && styles.lastItem,
                 ]}
                 onPress={item.onPress}
               >

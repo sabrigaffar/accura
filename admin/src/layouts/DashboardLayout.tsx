@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { Outlet, useNavigate, useLocation, NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import AdminProfile from '../components/AdminProfile';
+import { useSettings } from '../contexts/SettingsContext';
 
 // We'll use SVG icons instead of lucide-react to avoid import issues
 const HomeIcon = () => (
@@ -77,9 +78,22 @@ const MenuIcon = () => (
 );
 
 const XIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <line x1="18" y1="6" x2="6" y2="18"></line>
     <line x1="6" y1="6" x2="18" y2="18"></line>
+  </svg>
+);
+
+const MegaphoneIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 11l18-5v6l-18 5V6z"></path>
+    <path d="M11 12v9a2 2 0 0 1-2 2H7"></path>
+  </svg>
+);
+
+const CheckIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 6L9 17l-5-5"></path>
   </svg>
 );
 
@@ -89,6 +103,9 @@ const DashboardLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, signOut } = useAuth();
+  const { app } = useSettings();
+  const siteName = app?.site_name || 'لوحة تحكم الأدمن';
+  const maintenance = app?.maintenance_mode === true;
 
   // Redirect to login if not authenticated or not admin
   if (!user) {
@@ -106,8 +123,10 @@ const DashboardLayout = () => {
     { name: 'المستخدمون', icon: UsersIcon, path: '/users' },
     { name: 'التجار', icon: ShoppingBagIcon, path: '/merchants' },
     { name: 'السائقون', icon: CarIcon, path: '/drivers' },
+    { name: 'طلبات الانضمام', icon: CheckIcon, path: '/join-requests' },
     { name: 'الطلبات', icon: ShoppingCartIcon, path: '/orders' },
     { name: 'التقارير', icon: BarChartIcon, path: '/reports' },
+    { name: 'الإعلانات المموّلة', icon: MegaphoneIcon, path: '/sponsored-ads' },
     { name: 'اشتراكات المتاجر', icon: BarChartIcon, path: '/subscriptions' },
     { name: 'محفظة المنصة', icon: BarChartIcon, path: '/wallet' },
     { name: 'العروض', icon: BarChartIcon, path: '/promotions' },
@@ -120,7 +139,7 @@ const DashboardLayout = () => {
       {/* Sidebar */}
       <div className={`fixed inset-y-0 right-0 z-30 w-64 bg-white shadow-lg transform ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0`}>
         <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200">
-          <h1 className="text-xl font-bold text-primary">لوحة تحكم الأدمن</h1>
+          <h1 className="text-xl font-bold text-primary">{siteName}</h1>
           <button 
             className="lg:hidden"
             onClick={() => setSidebarOpen(false)}
@@ -130,20 +149,23 @@ const DashboardLayout = () => {
         </div>
         <nav className="mt-5 px-2">
           {menuItems.map((item) => (
-            <a
+            <NavLink
               key={item.name}
-              href={item.path}
-              className={`flex items-center px-4 py-3 text-base font-medium rounded-md ${
-                location.pathname === item.path 
-                  ? 'text-primary bg-primary/10' 
-                  : 'text-gray-700 hover:bg-gray-100'
-              }`}
+              to={item.path}
+              end={item.path === '/'}
+              className={({ isActive }) => {
+                const starts = item.path !== '/' && location.pathname.startsWith(item.path);
+                const active = isActive || starts;
+                return `flex items-center px-4 py-3 text-base font-medium rounded-md transition ${
+                  active ? 'text-primary bg-primary/10 border-r-4 border-primary' : 'text-gray-700 hover:bg-gray-100'
+                }`;
+              }}
             >
-              <div className="ml-3">
+              <div className="ml-3" aria-hidden="true">
                 <item.icon />
               </div>
               {item.name}
-            </a>
+            </NavLink>
           ))}
         </nav>
         
@@ -200,6 +222,11 @@ const DashboardLayout = () => {
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
+          {maintenance && (
+            <div className="mb-4 bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-2 rounded" dir="rtl">
+              ⚠️ وضع الصيانة مُفعل: قد تكون بعض الإجراءات مقيدة مؤقتاً.
+            </div>
+          )}
           <Outlet />
         </main>
       </div>

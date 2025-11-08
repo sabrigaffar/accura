@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -17,6 +17,10 @@ import {
 import { useDashboardStats, useDashboardCharts } from '../hooks/useSupabaseData';
 import { useLanguage } from '../contexts/LanguageContext';
 import SystemHealth from '../components/SystemHealth';
+import { supabase } from '../lib/supabase';
+import { useNavigate } from 'react-router-dom';
+import { useSettings } from '../contexts/SettingsContext';
+import AdminActivityLog from '../components/AdminActivityLog';
 
 // بيانات فارغة - سيتم ملؤها من قاعدة البيانات
 const statsData: any[] = [];
@@ -31,12 +35,58 @@ const DashboardPage = () => {
   const { stats, loading, error, refresh } = useDashboardStats();
   const { statsData: statsDataReal, userTypesData: userTypesDataReal, ordersGrowthData: ordersGrowthDataReal, loading: chartsLoading, error: chartsError, refresh: refreshCharts } = useDashboardCharts(timeRange as any);
   const { t } = useLanguage();
+  const { currency } = useSettings();
+  const navigate = useNavigate();
+  
+  const [pendingAds, setPendingAds] = useState<any[]>([]);
+  const [pendingAdsCount, setPendingAdsCount] = useState(0);
+  const [adminWallet, setAdminWallet] = useState<{ balance: number; currency: string } | null>(null);
+  const [loadingWallet, setLoadingWallet] = useState(false);
+
+  useEffect(() => {
+    fetchPendingAds();
+    fetchAdminWallet();
+  }, []);
+
+  const fetchPendingAds = async () => {
+    try {
+      const { data, error, count } = await supabase
+        .from('sponsored_ads')
+        .select('id, title, merchant_id, created_at, merchants!inner(name_ar)', { count: 'exact' })
+        .eq('approval_status', 'pending')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) throw error;
+      
+      setPendingAds(data || []);
+      setPendingAdsCount(count || 0);
+    } catch (error) {
+      console.error('Error fetching pending ads:', error);
+    }
+  };
+
+  const fetchAdminWallet = async () => {
+    try {
+      setLoadingWallet(true);
+      const { data: overview, error } = await supabase.rpc('get_admin_wallet_overview', { p_limit: 50 });
+      if (error) throw error;
+      const o: any = overview || {};
+      const w: any = o.wallet || null;
+      if (w) setAdminWallet({ balance: Number(w.balance) || 0, currency: w.currency || 'EGP' });
+    } catch (e) {
+      console.error('fetchAdminWallet', e);
+    } finally {
+      setLoadingWallet(false);
+    }
+  };
 
   const statsDataToShow = (statsDataReal && statsDataReal.length > 0) ? statsDataReal : statsData;
   const userTypesDataToShow = (userTypesDataReal && userTypesDataReal.length > 0) ? userTypesDataReal : userTypesData;
   const ordersGrowthDataToShow = (ordersGrowthDataReal && ordersGrowthDataReal.length > 0) ? ordersGrowthDataReal : ordersGrowthData;
 
-  const CURRENCY_LABEL = 'ج.م';
+  const CURRENCY_LABEL = currency;
   if (loading || chartsLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -70,7 +120,7 @@ const DashboardPage = () => {
           </select>
           <button 
             className="btn-secondary"
-            onClick={() => { refresh(); refreshCharts(); }}
+            onClick={() => { refresh(); refreshCharts(); fetchAdminWallet(); }}
           >
             {t('refresh')}
           </button>
@@ -78,7 +128,7 @@ const DashboardPage = () => {
       </div>
       
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6">
         {/* Users Card */}
         <div className="bg-white p-6 rounded-lg shadow">
           <div className="flex items-center">
@@ -124,6 +174,23 @@ const DashboardPage = () => {
           </div>
         </div>
 
+        {/* Platform Wallet Card */}
+        <div className="bg-white p-6 rounded-lg shadow cursor-pointer hover:shadow-md transition" onClick={() => navigate('/wallet')}>
+          <div className="flex items-center">
+            <div className="p-3 rounded-full bg-teal-100">
+              <svg className="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2m2-4h-6m0 0l2-2m-2 2l2 2" />
+              </svg>
+            </div>
+            <div className="mr-4">
+              <p className="text-sm font-medium text-gray-600">محفظة المنصة</p>
+              <p className="text-2xl font-semibold text-gray-900">
+                {adminWallet ? `${adminWallet.balance.toFixed(2)} ${adminWallet.currency || CURRENCY_LABEL}` : (loadingWallet ? '...' : `- ${CURRENCY_LABEL}`)}
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Merchants Card */}
         <div className="bg-white p-6 rounded-lg shadow">
           <div className="flex items-center">
@@ -135,6 +202,51 @@ const DashboardPage = () => {
             <div className="mr-4">
               <p className="text-sm font-medium text-gray-600">{t('merchants')}</p>
               <p className="text-2xl font-semibold text-gray-900">{stats.totalMerchants}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Sponsored Ads Total */}
+        <div className="bg-white p-6 rounded-lg shadow cursor-pointer hover:shadow-md transition" onClick={() => navigate('/sponsored-ads?tab=all')}>
+          <div className="flex items-center">
+            <div className="p-3 rounded-full bg-pink-100">
+              <svg className="w-6 h-6 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5l6 6-6 6M5 5h6v6" />
+              </svg>
+            </div>
+            <div className="mr-4">
+              <p className="text-sm font-medium text-gray-600">الإعلانات المموّلة</p>
+              <p className="text-2xl font-semibold text-gray-900">{stats.totalSponsoredAds}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Pending Orders */}
+        <div className="bg-white p-6 rounded-lg shadow cursor-pointer hover:shadow-md transition" onClick={() => navigate('/orders?status=pending')}>
+          <div className="flex items-center">
+            <div className="p-3 rounded-full bg-red-100">
+              <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="mr-4">
+              <p className="text-sm font-medium text-gray-600">الطلبات المعلقة</p>
+              <p className="text-2xl font-semibold text-gray-900">{stats.pendingOrders}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Pending Ads */}
+        <div className="bg-white p-6 rounded-lg shadow cursor-pointer hover:shadow-md transition" onClick={() => navigate('/sponsored-ads?tab=pending')}>
+          <div className="flex items-center">
+            <div className="p-3 rounded-full bg-orange-100">
+              <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 18.5a6.5 6.5 0 100-13 6.5 6.5 0 000 13z" />
+              </svg>
+            </div>
+            <div className="mr-4">
+              <p className="text-sm font-medium text-gray-600">الإعلانات المعلقة</p>
+              <p className="text-2xl font-semibold text-gray-900">{stats.pendingAds}</p>
             </div>
           </div>
         </div>
@@ -158,12 +270,12 @@ const DashboardPage = () => {
               >
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" />
-                <YAxis />
+                <YAxis yAxisId="left" />
+                <YAxis yAxisId="right" orientation="right" />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="users" fill="#00B074" name={t('users')} />
-                <Bar dataKey="orders" fill="#FFD84D" name={t('orders')} />
-                <Bar dataKey="revenue" fill="#0088FE" name={`${t('revenue')} (${CURRENCY_LABEL})`} />
+                <Bar yAxisId="left" dataKey="orders" fill="#FFD84D" name={t('orders')} />
+                <Line yAxisId="right" type="monotone" dataKey="revenue" stroke="#0088FE" name={`${t('revenue')} (${CURRENCY_LABEL})`} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -230,59 +342,43 @@ const DashboardPage = () => {
         </div>
       </div>
 
-      {/* Recent Activity */}
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h2 className="text-lg font-medium text-gray-900 mb-4">{t('recentActivity')}</h2>
-        <div className="space-y-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-                <span className="text-blue-600 text-sm">ع</span>
+      {/* Pending Sponsored Ads Alert */}
+      {pendingAdsCount > 0 && (
+        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <svg className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div className="mr-3">
+                <h3 className="text-sm font-medium text-yellow-800">
+                  لديك {pendingAdsCount} إعلان مموّل في انتظار الموافقة
+                </h3>
+                <div className="mt-2 text-sm text-yellow-700">
+                  <ul className="list-disc list-inside space-y-1">
+                    {pendingAds.slice(0, 3).map((ad: any) => (
+                      <li key={ad.id}>
+                        {ad.title} - {ad.merchants?.name_ar || 'غير معروف'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             </div>
-            <div className="mr-3">
-              <p className="text-sm font-medium text-gray-900">{t('newUserRegistered')}</p>
-              <p className="text-sm text-gray-500">أحمد محمد - قبل 10 دقائق</p>
-            </div>
-          </div>
-          
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
-                <span className="text-green-600 text-sm">ط</span>
-              </div>
-            </div>
-            <div className="mr-3">
-              <p className="text-sm font-medium text-gray-900">{t('newOrderCreated')}</p>
-              <p className="text-sm text-gray-500">طلب #12345 - قبل 25 دقيقة</p>
-            </div>
-          </div>
-          
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <div className="w-8 h-8 rounded-full bg-yellow-100 flex items-center justify-center">
-                <span className="text-yellow-600 text-sm">ت</span>
-              </div>
-            </div>
-            <div className="mr-3">
-              <p className="text-sm font-medium text-gray-900">{t('merchantActivated')}</p>
-              <p className="text-sm text-gray-500">مطعم الشاورما - قبل ساعة</p>
-            </div>
-          </div>
-          
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center">
-                <span className="text-purple-600 text-sm">س</span>
-              </div>
-            </div>
-            <div className="mr-3">
-              <p className="text-sm font-medium text-gray-900">{t('driverAssigned')}</p>
-              <p className="text-sm text-gray-500">سليمان عبدالله - قبل ساعتين</p>
-            </div>
+            <button
+              onClick={() => navigate('/sponsored-ads')}
+              className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition"
+            >
+              مراجعة الآن
+            </button>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Recent Activity (Live from DB) */}
+      <AdminActivityLog />
     </div>
   );
 };

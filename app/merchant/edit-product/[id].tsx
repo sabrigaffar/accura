@@ -23,10 +23,9 @@ export default function EditProductScreen() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
-  const [discountPrice, setDiscountPrice] = useState('');
   const [quantity, setQuantity] = useState('');
   const [category, setCategory] = useState(CATEGORIES[0]);
-  const [images, setImages] = useState<string[]>([]);
+  const [imageUrl, setImageUrl] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
 
@@ -37,7 +36,7 @@ export default function EditProductScreen() {
   const fetchProduct = async () => {
     try {
       const { data, error } = await supabase
-        .from('products')
+        .from('merchant_products')
         .select('*')
         .eq('id', id)
         .single();
@@ -45,13 +44,12 @@ export default function EditProductScreen() {
       if (error) throw error;
 
       if (data) {
-        setName(data.name);
-        setDescription(data.description || '');
-        setPrice(data.price.toString());
-        setDiscountPrice(data.discount_price?.toString() || '');
-        setQuantity(data.quantity.toString());
+        setName(data.name_ar || '');
+        setDescription(data.description_ar || '');
+        setPrice(data.price?.toString() || '');
+        setQuantity(data.stock?.toString() || '0');
         setCategory(data.category || CATEGORIES[0]);
-        setImages(data.images || []);
+        setImageUrl(data.image_url || '');
       }
     } catch (error: any) {
       console.error('Error fetching product:', error);
@@ -62,27 +60,26 @@ export default function EditProductScreen() {
     }
   };
 
-  const pickImages = async () => {
+  const pickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsMultipleSelection: true,
+        allowsMultipleSelection: false,
         quality: 0.8,
         aspect: [1, 1],
       });
 
-      if (!result.canceled && result.assets) {
-        const newImages = result.assets.map(asset => asset.uri);
-        setImages([...images, ...newImages].slice(0, 5));
+      if (!result.canceled && result.assets && result.assets[0]) {
+        setImageUrl(result.assets[0].uri);
       }
     } catch (error) {
-      console.error('Error picking images:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء اختيار الصور');
+      console.error('Error picking image:', error);
+      Alert.alert('خطأ', 'حدث خطأ أثناء اختيار الصورة');
     }
   };
 
-  const removeImage = (index: number) => {
-    setImages(images.filter((_, i) => i !== index));
+  const removeImage = () => {
+    setImageUrl('');
   };
 
   const validateForm = () => {
@@ -101,11 +98,6 @@ export default function EditProductScreen() {
       return false;
     }
 
-    if (discountPrice && parseFloat(discountPrice) >= parseFloat(price)) {
-      Alert.alert('خطأ', 'سعر الخصم يجب أن يكون أقل من السعر الأصلي');
-      return false;
-    }
-
     return true;
   };
 
@@ -115,17 +107,22 @@ export default function EditProductScreen() {
     setLoading(true);
 
     try {
+      const updateData: any = {
+        name_ar: name.trim(),
+        description_ar: description.trim(),
+        price: parseFloat(price),
+        category,
+        image_url: imageUrl || null,
+      };
+
+      // Only update stock if column exists
+      if (quantity) {
+        updateData.stock = parseInt(quantity);
+      }
+
       const { error } = await supabase
-        .from('products')
-        .update({
-          name: name.trim(),
-          description: description.trim(),
-          price: parseFloat(price),
-          discount_price: discountPrice ? parseFloat(discountPrice) : null,
-          quantity: parseInt(quantity),
-          category,
-          images: images,
-        })
+        .from('merchant_products')
+        .update(updateData)
         .eq('id', id);
 
       if (error) throw error;
@@ -171,26 +168,24 @@ export default function EditProductScreen() {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>صور المنتج</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesContainer}>
-            {images.map((uri, index) => (
-              <View key={index} style={styles.imageWrapper}>
-                <Image source={{ uri }} style={styles.productImage} />
+          <Text style={styles.sectionTitle}>صورة المنتج</Text>
+          <View style={styles.imagesContainer}>
+            {imageUrl ? (
+              <View style={styles.imageWrapper}>
+                <Image source={{ uri: imageUrl }} style={styles.productImage} />
                 <TouchableOpacity
                   style={styles.removeImageButton}
-                  onPress={() => removeImage(index)}
+                  onPress={removeImage}
                 >
                   <X size={16} color={colors.white} />
                 </TouchableOpacity>
               </View>
-            ))}
-            {images.length < 5 && (
-              <TouchableOpacity style={styles.addImageButton} onPress={pickImages}>
-                <Upload size={32} color={colors.textLight} />
-                <Text style={styles.addImageText}>إضافة صورة</Text>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
+            ) : null}
+            <TouchableOpacity style={styles.addImageButton} onPress={pickImage}>
+              <Upload size={32} color={colors.textLight} />
+              <Text style={styles.addImageText}>{imageUrl ? 'تغيير الصورة' : 'إضافة صورة'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.section}>
@@ -251,27 +246,18 @@ export default function EditProductScreen() {
           </View>
 
           <View style={[styles.section, { flex: 1 }]}>
-            <Text style={styles.label}>سعر الخصم</Text>
+            <Text style={styles.label}>الكمية المتوفرة *</Text>
             <TextInput
               style={styles.input}
-              placeholder="0.00"
-              value={discountPrice}
-              onChangeText={setDiscountPrice}
-              keyboardType="decimal-pad"
+              placeholder="0"
+              value={quantity}
+              onChangeText={setQuantity}
+              keyboardType="number-pad"
             />
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.label}>الكمية المتوفرة *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="0"
-            value={quantity}
-            onChangeText={setQuantity}
-            keyboardType="number-pad"
-          />
-        </View>
+
 
         <View style={styles.buttonsContainer}>
           <TouchableOpacity

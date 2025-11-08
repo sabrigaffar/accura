@@ -5,14 +5,24 @@
 
 import { useEffect } from 'react';
 import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function AuthIndex() {
   useEffect(() => {
-    // التوجيه الفوري إلى شاشة تسجيل الدخول الجديدة (Email/Phone + Password)
-    const timer = setTimeout(() => {
-      router.replace('/auth/login' as any);
-    }, 100);
-    
+    let timer: any;
+    (async () => {
+      try {
+        const otpPending = await AsyncStorage.getItem('otp_pending_signup');
+        // نظّف علم توثيق التاجر إن لم نكن في مسار تسجيل جديد
+        if (otpPending !== 'true') {
+          try { await AsyncStorage.setItem('kyc_merchant_from_signup', 'false'); } catch {}
+        }
+        const target = otpPending === 'true' ? '/auth/signup' : '/auth/login';
+        timer = setTimeout(() => router.replace(target as any), 50);
+      } catch {
+        timer = setTimeout(() => router.replace('/auth/login' as any), 50);
+      }
+    })();
     return () => clearTimeout(timer);
   }, []);
 

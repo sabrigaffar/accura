@@ -32,18 +32,6 @@ const GlobeIcon = () => (
   </svg>
 );
 
-const MailIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-    <polyline points="22,6 12,13 2,6"></polyline>
-  </svg>
-);
-
-const KeyIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
-  </svg>
-);
 
 const Trash2Icon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -102,6 +90,7 @@ const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     loadPlatformSettings();
+    loadAppSettings();
   }, []);
 
   const loadPlatformSettings = async () => {
@@ -131,6 +120,30 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  const loadAppSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('app_settings')
+        .select('*')
+        .eq('id', 'global')
+        .maybeSingle();
+      if (error) throw error;
+      if (data) {
+        setSettings({
+          siteName: data.site_name || settings.siteName,
+          emailNotifications: Boolean(data.email_notifications ?? settings.emailNotifications),
+          pushNotifications: Boolean(data.push_notifications ?? settings.pushNotifications),
+          twoFactorAuth: Boolean(data.two_factor_auth ?? settings.twoFactorAuth),
+          language: data.language || settings.language,
+          theme: data.theme || settings.theme,
+          maintenanceMode: Boolean(data.maintenance_mode ?? settings.maintenanceMode),
+        });
+      }
+    } catch (e) {
+      console.error('loadAppSettings error:', e);
+    }
+  };
+
   const handleSavePlatformSettings = async () => {
     try {
       setPlatformLoading(true);
@@ -148,6 +161,17 @@ const SettingsPage: React.FC = () => {
         .from('platform_settings')
         .upsert(payload);
       if (error) throw error;
+      // Log admin activity
+      try {
+        await supabase.from('admin_activity_log').insert({
+          admin_id: user?.id || null,
+          action: 'update',
+          resource_type: 'platform_settings',
+          resource_id: '1',
+          details: payload,
+          timestamp: new Date().toISOString(),
+        });
+      } catch {}
       alert('تم حفظ إعدادات المنصة بنجاح');
     } catch (e: any) {
       alert(e.message || 'فشل حفظ إعدادات المنصة');
@@ -163,6 +187,16 @@ const SettingsPage: React.FC = () => {
         .from('platform_settings')
         .upsert({ id: 1, driver_commission_free_until: null });
       if (error) throw error;
+      try {
+        await supabase.from('admin_activity_log').insert({
+          admin_id: user?.id || null,
+          action: 'update',
+          resource_type: 'platform_settings',
+          resource_id: '1',
+          details: { driver_commission_free_until: null },
+          timestamp: new Date().toISOString(),
+        });
+      } catch {}
       alert('تم إلغاء الفترة المجانية بنجاح (السريان فوري)');
     } catch (e: any) {
       alert(e.message || 'تعذر إلغاء الفترة المجانية');
@@ -187,6 +221,17 @@ const SettingsPage: React.FC = () => {
         .from('app_settings')
         .upsert(payload);
       if (error) throw error;
+      // Log admin activity
+      try {
+        await supabase.from('admin_activity_log').insert({
+          admin_id: user?.id || null,
+          action: 'update',
+          resource_type: 'app_settings',
+          resource_id: 'global',
+          details: payload,
+          timestamp: new Date().toISOString(),
+        });
+      } catch {}
       alert('تم حفظ الإعدادات بنجاح');
     } catch (e: any) {
       alert(e.message || 'فشل حفظ الإعدادات. تأكد من وجود جدول app_settings وسياسات RLS');
@@ -269,11 +314,7 @@ const SettingsPage: React.FC = () => {
           .gte('timestamp', '1900-01-01');
         if (e1) throw e1;
 
-        const { error: e2 } = await supabase
-          .from('audit_log')
-          .delete()
-          .gte('timestamp', '1900-01-01');
-        if (e2) throw e2;
+        // Removed legacy audit_log deletion: table does not exist in current schema
 
         try {
           await supabase.from('admin_activity_log').insert({
@@ -312,7 +353,7 @@ const SettingsPage: React.FC = () => {
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700">رسوم الخدمة الثابتة (EGP)</label>
+                <label className="block text-sm font-medium text-gray-700">رسوم الخدمة الثابتة ({ps.currency})</label>
                 <input
                   type="number"
                   step="0.5"
@@ -323,7 +364,7 @@ const SettingsPage: React.FC = () => {
               </div>
 
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700">عمولة على السائق لكل كم (EGP)</label>
+                <label className="block text-sm font-medium text-gray-700">عمولة على السائق لكل كم ({ps.currency})</label>
                 <input
                   type="number"
                   step="0.5"
@@ -345,7 +386,7 @@ const SettingsPage: React.FC = () => {
               </div>
 
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700">عمولة ثابتة على المتاجر (EGP)</label>
+                <label className="block text-sm font-medium text-gray-700">عمولة ثابتة على المتاجر ({ps.currency})</label>
                 <input
                   type="number"
                   step="0.5"
@@ -487,6 +528,7 @@ const SettingsPage: React.FC = () => {
                 />
               </button>
             </div>
+            <p className="text-xs text-gray-500">ملاحظة: لتمكين 2FA فعلياً يلزم إعداد موفر المصادقة الثنائية (TOTP/OTP) على الخادم.</p>
             
             <div className="flex items-center justify-between">
               <div>
@@ -534,6 +576,7 @@ const SettingsPage: React.FC = () => {
                 />
               </button>
             </div>
+            <p className="text-xs text-gray-500">ملاحظة: يلزم إعداد SMTP على الخادم لإرسال البريد (لن يعمل هذا الخيار بدون الإعدادات الخلفية).</p>
             
             <div className="flex items-center justify-between">
               <div>
@@ -553,6 +596,7 @@ const SettingsPage: React.FC = () => {
                 />
               </button>
             </div>
+            <p className="text-xs text-gray-500">ملاحظة: يلزم Service Worker وموفّر مثل FCM ومفاتيح المتصفح لتفعيل Push حقيقية.</p>
 
             <div className="flex flex-wrap gap-2 pt-2">
               <button

@@ -13,9 +13,11 @@ import {
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
 import { supabase } from '@/lib/supabase';
+import { getLastAdId, clearLastAdId } from '@/lib/adAttribution';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { ArrowLeft, MapPin, CreditCard, Wallet, Plus, Minus } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCart } from '@/contexts/CartContext';
 
 interface CartItem {
   id: string;
@@ -38,6 +40,7 @@ interface Address {
 
 export default function CheckoutScreen() {
   const { user } = useAuth();
+  const { clearCart } = useCart();
   const params = useLocalSearchParams<{ 
     items?: string; 
     merchantId?: string;
@@ -54,6 +57,20 @@ export default function CheckoutScreen() {
   const [loading, setLoading] = useState(false);
   const [calculatedDeliveryFee, setCalculatedDeliveryFee] = useState<number>(10);
   const [calculatingFee, setCalculatingFee] = useState(false);
+  // Quote breakdown (server-calculated) to show accurate discount before confirmation
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quote, setQuote] = useState<{
+    subtotal: number;
+    delivery_fee: number;
+    service_fee: number;
+    tax: number;
+    discount: number;
+    total: number;
+    apply_on?: string | null;
+    applied_rule?: string | null;
+    applied_promotion?: string | null;
+    applied_ad?: string | null;
+  } | null>(null);
   
   // موقع مزقت من pick-location
   const [temporaryLocation, setTemporaryLocation] = useState<{
@@ -157,8 +174,28 @@ export default function CheckoutScreen() {
     // Initialize cart items from route params if provided
     if (params.items && typeof params.items === 'string') {
       try {
-        const parsed = JSON.parse(params.items) as Array<{ id: string; name: string; price: number; quantity: number }>; 
-        setCartItems(parsed.map(p => ({ id: p.id, name: p.name, price: p.price, quantity: p.quantity, image_url: '' })));
+        console.log('📦 Raw params.items:', params.items);
+        const parsed = JSON.parse(params.items) as Array<{ id: string; name: string; price: number; quantity: number }>;
+        console.log('✅ Parsed items:', parsed);
+        
+        // تحويل وتنظيف البيانات فوراً
+        const cleanedItems = parsed.map(p => {
+          const price = typeof p.price === 'number' ? p.price : parseFloat(String(p.price || 0));
+          const quantity = typeof p.quantity === 'number' ? p.quantity : parseInt(String(p.quantity || 1), 10);
+          
+          console.log(`Item ${p.name}: price=${price}, quantity=${quantity}`);
+          
+          return {
+            id: p.id,
+            name: p.name,
+            price: !isNaN(price) && price > 0 ? price : 0,
+            quantity: !isNaN(quantity) && quantity > 0 ? quantity : 1,
+            image_url: ''
+          };
+        });
+        
+        console.log('🛒 Final cart items:', cleanedItems);
+        setCartItems(cleanedItems);
       } catch (e) {
         console.error('Error parsing cart items:', e);
         Alert.alert(
@@ -176,6 +213,68 @@ export default function CheckoutScreen() {
       );
     }
   }, [params.items]);
+
+  // Build items JSON for quote RPC
+  const buildItemsJson = () => {
+    try {
+      const arr = cartItems.map(ci => ({
+        product_id: ci.id,
+        price: ci.price,
+        quantity: ci.quantity,
+      }));
+      return JSON.parse(JSON.stringify(arr));
+    } catch {
+      return [] as any[];
+    }
+  };
+
+  // Refresh server quote whenever inputs change
+  useEffect(() => {
+    const run = async () => {
+      if (!merchantIdParam || cartItems.length === 0) {
+        setQuote(null);
+        return;
+      }
+      try {
+        setQuoteLoading(true);
+        const itemsJson = buildItemsJson();
+        const adId = await getLastAdId();
+        const { data, error } = await supabase.rpc('quote_order_v3', {
+          p_customer_id: user?.id ?? null,
+          p_store_id: merchantIdParam,
+          p_items: itemsJson,
+          p_payment_method: paymentMethod,
+          p_delivery_fee: calculatedDeliveryFee,
+          p_tax: 1.5,
+          p_ad_id: adId,
+        });
+        if (error) throw error;
+        const row = Array.isArray(data) && data[0] ? data[0] : null;
+        if (row) {
+          setQuote({
+            subtotal: Number(row.subtotal) || 0,
+            delivery_fee: Number(row.delivery_fee) || 0,
+            service_fee: Number(row.service_fee) || 0,
+            tax: Number(row.tax) || 0,
+            discount: Number(row.discount) || 0,
+            total: Number(row.total) || 0,
+            apply_on: row.apply_on || null,
+            applied_rule: row.applied_rule || null,
+            applied_promotion: row.applied_promotion || null,
+            applied_ad: row.applied_ad || null,
+          });
+        } else {
+          setQuote(null);
+        }
+      } catch (e) {
+        console.warn('quote_order_v3 error:', (e as any)?.message || e);
+        setQuote(null);
+      } finally {
+        setQuoteLoading(false);
+      }
+    };
+    run();
+  }, [merchantIdParam, cartItems, paymentMethod, calculatedDeliveryFee]);
 
   const fetchUserAddresses = async () => {
     try {
@@ -349,6 +448,26 @@ export default function CheckoutScreen() {
     setLoading(true);
     
     try {
+      // ✅ فحص المخزون قبل إنشاء الطلب
+      if (params.items && typeof params.items === 'string') {
+        for (const item of cartItems) {
+          const { data: stockCheck } = await supabase.rpc('check_product_stock', {
+            p_product_id: item.id,
+            p_requested_quantity: item.quantity || 1
+          });
+          
+          if (stockCheck && stockCheck.length > 0 && !stockCheck[0].available) {
+            Alert.alert(
+              'مخزون غير كافٍ',
+              `${item.name}: ${stockCheck[0].message}`,
+              [{ text: 'حسناً' }]
+            );
+            setLoading(false);
+            return;
+          }
+        }
+      }
+
       // إنشاء طلب جديد
       const orderData: any = {
         order_number: `ORD-${Date.now()}`,
@@ -356,12 +475,12 @@ export default function CheckoutScreen() {
         merchant_id: merchantIdToUse,  // معرف المتجر (يتطابق مع FK)
         store_id: merchantIdToUse,      // نفس القيمة (للتوافق مع النظام)
         status: 'pending',
-        subtotal: getTotalPrice(),
-        delivery_fee: calculatedDeliveryFee,
-        service_fee: 2.50,
-        tax: 1.50,
-        discount: 0.00,
-        total: getTotalPrice() + calculatedDeliveryFee + 4.00,
+        subtotal: quote?.subtotal ?? getTotalPrice(),
+        delivery_fee: quote?.delivery_fee ?? calculatedDeliveryFee,
+        service_fee: quote?.service_fee ?? 2.50,
+        tax: quote?.tax ?? 1.50,
+        discount: quote?.discount ?? 0.00,
+        total: quote ? quote.total : (getTotalPrice() + calculatedDeliveryFee + 4.00),
         payment_method: paymentMethod,
         payment_status: paymentMethod === 'cash' ? 'pending' : 'paid',
         delivery_notes: deliveryNotes,
@@ -391,52 +510,86 @@ export default function CheckoutScreen() {
 
       // إنشاء عناصر الطلب فقط إذا جاءت من صفحة المتجر (params.items موجودة)
       if (params.items && typeof params.items === 'string') {
-        const orderItems = cartItems.map(item => ({
+        // التحقق من صحة بيانات السلة
+        console.log('🛒 Cart items before insertion:', JSON.stringify(cartItems, null, 2));
+        
+        // تنظيف وتحويل البيانات
+        const validatedItems = cartItems.map(item => {
+          const price = typeof item.price === 'number' ? item.price : parseFloat(String(item.price || 0));
+          const quantity = typeof item.quantity === 'number' ? item.quantity : parseInt(String(item.quantity || 1), 10);
+          
+          if (isNaN(price) || price <= 0) {
+            console.error('⚠️ Invalid price for item:', item);
+          }
+          if (isNaN(quantity) || quantity <= 0) {
+            console.error('⚠️ Invalid quantity for item:', item);
+          }
+          
+          return {
+            ...item,
+            price: price > 0 ? price : 0,
+            quantity: quantity > 0 ? quantity : 1,
+          };
+        });
+        
+        // إدراج جميع الأعمدة (القديمة + الجديدة) معاً لضمان التوافق الكامل
+        const allColumnsItems = validatedItems.map(item => ({
           order_id: data.id,
           product_id: item.id,
+          quantity: item.quantity,  // ← الكمية (مهم جداً!)
+          // أعمدة قديمة
+          product_name_ar: item.name,
+          unit_price: item.price,
+          total_price: item.price * item.quantity,
+          // أعمدة جديدة
           product_name: item.name,
-          quantity: item.quantity,
           price: item.price,
           total: item.price * item.quantity,
         }));
+        
+        console.log('📦 Items to insert (all columns):', JSON.stringify(allColumnsItems, null, 2));
 
-        const { error: itemsError } = await supabase
+        // جرب الإدراج بجميع الأعمدة
+        const insertResult = await supabase
           .from('order_items')
-          .insert(orderItems);
+          .insert(allColumnsItems);
 
-        if (itemsError) {
-          console.error('Order items error:', itemsError);
-          throw itemsError;
+        if (insertResult.error) {
+          console.error('❌ Insert failed:', insertResult.error);
+          throw insertResult.error;
         }
+        
+        console.log('✅ Order items inserted successfully');
         
         console.log('✅ Order items created successfully');
 
-        // Apply promotions on server (idempotent): updates subtotal/service_fee/discount/total
+        // Persist the same quote breakdown to the order and record discount details
         try {
-          const { data: promoData, error: promoError } = await supabase.rpc('apply_promotions_tx', { p_order_id: data.id });
-          if (promoError) {
-            console.warn('⚠️ apply_promotions_tx warning:', promoError);
+          const { data: applyData, error: applyErr } = await supabase.rpc('apply_quote_v3_to_order', {
+            p_order_id: data.id,
+            p_ad_id: quote?.applied_ad ?? null,
+          });
+          if (applyErr) {
+            console.warn('⚠️ apply_quote_v3_to_order warning:', applyErr.message || applyErr);
           } else {
-            console.log('✅ Promotions applied:', promoData);
-          }
-          // Optional: refetch order to see updated totals
-          const { data: updatedOrder } = await supabase
-            .from('orders')
-            .select('*')
-            .eq('id', data.id)
-            .single();
-          if (updatedOrder) {
-            console.log('🧾 Updated order after promotions:', updatedOrder);
+            console.log('✅ apply_quote_v3_to_order:', applyData);
+            if (quote?.applied_ad) {
+              try { await clearLastAdId(); } catch {}
+            }
           }
         } catch (e) {
-          console.warn('⚠️ Failed to apply promotions:', e);
+          console.warn('⚠️ Failed to apply quote to order:', e);
         }
       }
+
+      // No separate ad application needed; persisted via apply_quote_v3_to_order
 
       // حفظ معلومات الطلب قبل التوجيه
       const orderNumber = data.order_number;
       const orderId = data.id;
       
+      console.log('🧹 Clearing cart after successful order...');
+      try { clearCart(); } catch {}
       console.log('🚀 Navigating to orders page...');
 
       // التوجيه الفوري بدون Alert
@@ -608,27 +761,35 @@ export default function CheckoutScreen() {
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر المنتجات</Text>
-            <Text style={styles.summaryValue}>{getTotalPrice().toFixed(2)} جنيه</Text>
+            <Text style={styles.summaryValue}>{(quote?.subtotal ?? getTotalPrice()).toFixed(2)} جنيه</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>سعر التوصيل</Text>
             {calculatingFee ? (
               <Text style={styles.summaryValue}>جاري الحساب...</Text>
             ) : (
-              <Text style={styles.summaryValue}>{calculatedDeliveryFee.toFixed(2)} جنيه</Text>
+              <Text style={styles.summaryValue}>{(quote?.delivery_fee ?? calculatedDeliveryFee).toFixed(2)} جنيه</Text>
             )}
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>رسوم الخدمة</Text>
-            <Text style={styles.summaryValue}>2.50 جنيه</Text>
+            <Text style={styles.summaryValue}>{(quote?.service_fee ?? 2.5).toFixed(2)} جنيه</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>الضريبة</Text>
-            <Text style={styles.summaryValue}>1.50 جنيه</Text>
+            <Text style={styles.summaryValue}>{(quote?.tax ?? 1.5).toFixed(2)} جنيه</Text>
           </View>
+          {(quote?.discount ?? 0) > 0 && (
+            <View style={styles.summaryRow}>
+              <Text style={[styles.summaryLabel, { color: colors.success }]}>الخصم {quote?.apply_on ? `• ${quote?.apply_on === 'delivery_fee' ? 'رسوم التوصيل' : quote?.apply_on === 'service_fee' ? 'رسوم الخدمة' : quote?.apply_on === 'product' ? 'على منتج' : 'قيمة الطلب'}` : ''}</Text>
+              <Text style={[styles.summaryValue, { color: colors.success }]}>- {(quote?.discount ?? 0).toFixed(2)} جنيه</Text>
+            </View>
+          )}
           <View style={[styles.summaryRow, styles.totalRow]}>
             <Text style={styles.totalLabel}>المجموع الإجمالي</Text>
-            <Text style={styles.totalValue}>{(getTotalPrice() + calculatedDeliveryFee + 4.00).toFixed(2)} جنيه</Text>
+            <Text style={styles.totalValue}>{(
+              quote ? quote.total : (getTotalPrice() + calculatedDeliveryFee + 4.00)
+            ).toFixed(2)} جنيه</Text>
           </View>
         </View>
       </ScrollView>

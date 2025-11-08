@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ArrowLeft, Bell, Package, DollarSign, MessageSquare, Volume2, Star } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function MerchantNotifications() {
   const [notifications, setNotifications] = useState({
@@ -22,8 +23,32 @@ export default function MerchantNotifications() {
     vibration: true,
   });
 
-  const toggleNotification = (key: keyof typeof notifications) => {
-    setNotifications((prev) => ({ ...prev, [key]: !prev[key] }));
+  // Load saved preferences
+  useEffect(() => {
+    loadNotificationSettings();
+  }, []);
+
+  const loadNotificationSettings = async () => {
+    try {
+      const saved = await AsyncStorage.getItem('merchant_notification_settings');
+      if (saved) {
+        setNotifications(JSON.parse(saved));
+      }
+    } catch (error) {
+      console.log('Error loading notification settings:', error);
+    }
+  };
+
+  const toggleNotification = async (key: keyof typeof notifications) => {
+    const newSettings = { ...notifications, [key]: !notifications[key] };
+    setNotifications(newSettings);
+    
+    // Save to AsyncStorage
+    try {
+      await AsyncStorage.setItem('merchant_notification_settings', JSON.stringify(newSettings));
+    } catch (error) {
+      console.log('Error saving notification settings:', error);
+    }
   };
 
   const notificationSettings = [

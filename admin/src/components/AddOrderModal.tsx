@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useSettings } from '../contexts/SettingsContext';
 
 interface AddOrderModalProps {
   isOpen: boolean;
@@ -8,6 +9,7 @@ interface AddOrderModalProps {
 }
 
 const AddOrderModal: React.FC<AddOrderModalProps> = ({ isOpen, onClose, onOrderAdded }) => {
+  const { currency } = useSettings();
   const [orderNumber, setOrderNumber] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [merchantId, setMerchantId] = useState('');
@@ -168,7 +170,7 @@ const AddOrderModal: React.FC<AddOrderModalProps> = ({ isOpen, onClose, onOrderA
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">الإجمالي (ر.س)</label>
+              <label className="block text-sm font-medium text-gray-700">الإجمالي ({currency})</label>
               <input
                 type="number"
                 min="0"

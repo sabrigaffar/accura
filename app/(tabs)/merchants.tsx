@@ -12,8 +12,9 @@ import {
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
-import { Search, Filter, UtensilsCrossed } from 'lucide-react-native';
+import { Search, Filter, UtensilsCrossed, Clock, CheckCircle, XCircle, MapPin } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
+import * as Location from 'expo-location';
 
 interface Merchant {
   id: string;
@@ -27,6 +28,8 @@ interface Merchant {
   delivery_fee: number;
   min_order_amount: number;
   is_open: boolean;
+  working_hours?: any;
+  distance_km?: number;
 }
 
 export default function MerchantsScreen() {
@@ -36,6 +39,7 @@ export default function MerchantsScreen() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const nearbyRadiusKm = 10;
 
   const styles = useMemo(() => createStyles(theme), [theme]);
 
@@ -50,26 +54,29 @@ export default function MerchantsScreen() {
   const fetchMerchants = async () => {
     try {
       setLoading(true);
-      // Use RPC to fetch only merchants with active subscription or within trial (SECURITY DEFINER on server)
-      const { data, error } = await supabase
-        .rpc('list_active_merchants');
-
-      if (error) {
-        // Fallback: select active merchants directly if RPC is not available
-        const { data: fallback, error: fbErr } = await supabase
-          .from('merchants')
-          .select('*')
-          .eq('is_active', true)
-          .order('created_at', { ascending: false });
-        if (fbErr) throw fbErr;
-        setMerchants((fallback as any) || []);
-        setFilteredMerchants((fallback as any) || []);
-      } else {
-        setMerchants((data as any) || []);
-        setFilteredMerchants((data as any) || []);
+      // احصل على موقع العميل ثم اعرض المتاجر القريبة ضمن 10 كم
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setMerchants([]);
+        setFilteredMerchants([]);
+        return;
       }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const lat = loc.coords.latitude;
+      const lng = loc.coords.longitude;
+      const { data, error } = await supabase.rpc('merchants_nearby', {
+        p_lat: lat,
+        p_lng: lng,
+        p_radius_km: nearbyRadiusKm,
+      });
+      if (error) throw error;
+      const rows = Array.isArray(data) ? (data as any[]) : [];
+      setMerchants(rows as any);
+      setFilteredMerchants(rows as any);
     } catch (error) {
-      console.error('Error fetching merchants:', error);
+      console.error('Error fetching nearby merchants:', error);
+      setMerchants([]);
+      setFilteredMerchants([]);
     } finally {
       setLoading(false);
     }
@@ -95,40 +102,85 @@ export default function MerchantsScreen() {
     setFilteredMerchants(filtered);
   };
 
+  
+
   const getUniqueCategories = () => {
     const categories = merchants.map(merchant => merchant.category);
     return [...new Set(categories)];
   };
 
-  const renderMerchantCard = ({ item }: { item: Merchant }) => (
-    <TouchableOpacity 
-      style={styles.merchantCard}
-      onPress={() => router.push({ pathname: '/merchant/[id]', params: { id: item.id } })}
-    >
-      <View style={styles.merchantImage}>
-        {item.logo_url ? (
-          <Image source={{ uri: item.logo_url }} style={styles.merchantLogo} />
-        ) : (
-          <View style={[styles.merchantLogo, styles.placeholderLogo]}>
-            <UtensilsCrossed size={32} color={theme.textLight} />
-          </View>
-        )}
-      </View>
-      <View style={styles.merchantInfo}>
-        <Text style={styles.merchantName}>{item.name_ar}</Text>
-        <Text style={styles.merchantDescription} numberOfLines={2}>
-          {item.description_ar}
-        </Text>
-        <View style={styles.merchantDetails}>
-          <Text style={styles.rating}>⭐ {item.rating}</Text>
-          <Text style={styles.deliveryInfo}>
-            {item.delivery_fee > 0 ? `${item.delivery_fee} جنيه توصيل` : 'توصيل مجاني'}
-          </Text>
+  const getWorkingHoursText = (merchant: Merchant) => {
+    if (!merchant.working_hours) return 'غير محدد';
+    
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const today = days[new Date().getDay()];
+    const todaySchedule = merchant.working_hours[today];
+    
+    if (!todaySchedule || !todaySchedule.isOpen) {
+      return 'مغلق اليوم';
+    }
+    
+    return `${todaySchedule.openTime} - ${todaySchedule.closeTime}`;
+  };
+
+  const isMerchantOpenNow = (merchant: Merchant) => {
+    return (merchant as any).is_currently_open ?? merchant.is_open;
+  };
+
+  const renderMerchantCard = ({ item }: { item: Merchant }) => {
+    const isOpen = isMerchantOpenNow(item);
+    const workingHours = getWorkingHoursText(item);
+    
+    return (
+      <TouchableOpacity 
+        style={styles.merchantCard}
+        onPress={() => router.push({ pathname: '/merchant/[id]', params: { id: item.id } })}
+      >
+        <View style={styles.merchantImage}>
+          {(item.banner_url || item.logo_url) ? (
+            <Image source={{ uri: (item.banner_url || item.logo_url) as string }} style={styles.merchantLogo} />
+          ) : (
+            <View style={[styles.merchantLogo, styles.placeholderLogo]}>
+              <UtensilsCrossed size={32} color={theme.textLight} />
+            </View>
+          )}
         </View>
-      </View>
-      {item.is_open && <View style={styles.openBadge}><Text style={styles.openText}>مفتوح</Text></View>}
-    </TouchableOpacity>
-  );
+        <View style={styles.merchantInfo}>
+          <View style={styles.merchantHeader}>
+            <Text style={styles.merchantName}>{item.name_ar}</Text>
+            {isOpen ? (
+              <View style={styles.statusBadgeOpen}>
+                <CheckCircle size={12} color="#fff" />
+                <Text style={styles.statusText}>مفتوح</Text>
+              </View>
+            ) : (
+              <View style={styles.statusBadgeClosed}>
+                <XCircle size={12} color="#fff" />
+                <Text style={styles.statusText}>مغلق</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.merchantDescription} numberOfLines={2}>
+            {item.description_ar}
+          </Text>
+          <View style={styles.workingHoursRow}>
+            <Clock size={14} color={theme.textLight} />
+            <Text style={styles.workingHoursText}>{workingHours}</Text>
+          </View>
+          <View style={styles.merchantDetails}>
+            <Text style={styles.rating}>⭐ {item.rating || 0}</Text>
+            <Text style={styles.deliveryInfo}>توصيل: {item.delivery_fee} جنيه</Text>
+          </View>
+          <View style={styles.distanceRow}>
+            <MapPin size={14} color={theme.textLight} />
+            <Text style={styles.distanceText}>
+              {item.distance_km != null ? `${Number(item.distance_km).toFixed(1)} كم` : ''}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   if (loading) {
     return (
@@ -194,7 +246,7 @@ export default function MerchantsScreen() {
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>لا توجد متاجر متوفرة</Text>
+            <Text style={styles.emptyText}>لا توجد متاجر قريبة ضمن 10 كم</Text>
           </View>
         }
       />
@@ -246,6 +298,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     marginLeft: spacing.sm,
   },
+  
   categoriesContainer: {
     flexDirection: 'row',
     padding: spacing.md,
@@ -309,16 +362,56 @@ const createStyles = (theme: any) => StyleSheet.create({
     flex: 1,
     marginRight: spacing.md,
   },
+  merchantHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
   merchantName: {
     ...typography.h3,
     color: theme.text,
-    marginBottom: spacing.xs,
+    flex: 1,
+  },
+  statusBadgeOpen: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: theme.secondary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+  },
+  statusBadgeClosed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: theme.error || '#dc2626',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+  },
+  statusText: {
+    ...typography.caption,
+    fontSize: 10,
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   merchantDescription: {
     ...typography.body,
     color: theme.textLight,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
     lineHeight: 20,
+  },
+  workingHoursRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  workingHoursText: {
+    ...typography.caption,
+    color: theme.textLight,
   },
   merchantDetails: {
     flexDirection: 'row',
@@ -329,6 +422,16 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.text,
   },
   deliveryInfo: {
+    ...typography.caption,
+    color: theme.textLight,
+  },
+  distanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: spacing.xs,
+  },
+  distanceText: {
     ...typography.caption,
     color: theme.textLight,
   },

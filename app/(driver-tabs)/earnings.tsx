@@ -94,48 +94,137 @@ export default function DriverEarnings() {
         return;
       }
 
-      // جلب جميع الأرباح للسائق
-      const { data: earningsData, error: earningsError } = await supabase
-        .from('driver_earnings')
-        .select(`
-          id,
-          amount,
-          net_amount,
-          commission_amount,
-          earned_at,
-          order:orders!driver_earnings_order_id_fkey (
-            order_number,
-            customer:profiles!orders_customer_id_fkey (
-              full_name
-            )
-          )
-        `)
-        .eq('driver_id', user.id)
+      // حاول أولاً القراءة من العرض driver_earnings_effective (الأكثر موثوقية)
+      let earningsRows: any[] | null = null;
+      const ve = await supabase
+        .from('driver_earnings_effective')
+        .select('id, effective_amount, net_amount, commission_amount, earned_at, order_number, customer_name')
         .order('earned_at', { ascending: false });
 
-      if (earningsError) throw earningsError;
+      if (ve.error) {
+        // إذا كان العرض غير موجود (42P01) أو خطأ أعمدة، استخدم الاستعلام التقليدي كاحتياطي
+        const code = (ve.error as any).code;
+        if (code === '42P01' || code === '42703') {
+          const q1 = await supabase
+            .from('driver_earnings')
+            .select(`
+              id,
+              amount,
+              net_amount,
+              commission_amount,
+              earned_at,
+              created_at,
+              order:orders!driver_earnings_order_id_fkey (
+                order_number,
+                delivery_fee,
+                calculated_delivery_fee,
+                delivery_distance_km,
+                customer:profiles!orders_customer_id_fkey (
+                  full_name
+                )
+              )
+            `)
+            .eq('driver_id', user.id)
+            .order('earned_at', { ascending: false });
+
+          if (q1.error) {
+            if ((q1.error as any).code === '42703') {
+              const q2 = await supabase
+                .from('driver_earnings')
+                .select(`
+                  id,
+                  amount,
+                  net_amount,
+                  commission_amount,
+                  created_at,
+                  order:orders!driver_earnings_order_id_fkey (
+                    order_number,
+                    delivery_fee,
+                    calculated_delivery_fee,
+                    delivery_distance_km,
+                    customer:profiles!orders_customer_id_fkey (
+                      full_name
+                    )
+                  )
+                `)
+                .eq('driver_id', user.id)
+                .order('created_at', { ascending: false });
+              if (q2.error) throw q2.error;
+              earningsRows = q2.data as any[];
+            } else {
+              throw q1.error;
+            }
+          } else {
+            earningsRows = q1.data as any[];
+          }
+        } else {
+          throw ve.error;
+        }
+      } else {
+        // تم إرجاع البيانات من العرض مباشرة
+        earningsRows = (ve.data as any[]).map((r) => ({
+          id: r.id,
+          amount: r.effective_amount,
+          net_amount: r.net_amount,
+          commission_amount: r.commission_amount,
+          earned_at: r.earned_at,
+          created_at: r.earned_at,
+          order: { order_number: r.order_number, customer: { full_name: r.customer_name } },
+        }));
+      }
 
       // معالجة البيانات
-      const processedEarnings: Earning[] = (earningsData || []).map((earning: any) => {
+      try {
+        console.log('[EARNINGS] raw rows count:', (earningsRows || []).length);
+        console.log('[EARNINGS] raw sample:', (earningsRows || [])[0]);
+      } catch {}
+      const processedEarnings: Earning[] = (earningsRows || []).map((earning: any) => {
         const order = Array.isArray(earning.order) ? earning.order[0] : earning.order;
         const customer = order?.customer ? (Array.isArray(order.customer) ? order.customer[0] : order.customer) : null;
-        const gross = Number(earning.amount ?? 0);
+        const KM_FEE = 10; // مطابق للدالة على السيرفر
+        const orderDeliveryFee = Number(order?.delivery_fee ?? 0);
+        const orderCalculatedFee = Number(order?.calculated_delivery_fee ?? 0);
+        const orderDistanceKm = order?.delivery_distance_km !== undefined && order?.delivery_distance_km !== null
+          ? Number(order.delivery_distance_km)
+          : NaN;
+
+        const distanceFee = !isNaN(orderDistanceKm) ? Math.ceil(orderDistanceKm) * KM_FEE : 0;
+
+        let gross = Number(earning.amount ?? 0);
+        if (!gross || gross <= 0) {
+          // fallback إلى قيم الطلب إذا كان amount = 0 في السجل
+          gross = Math.max(orderDeliveryFee || 0, orderCalculatedFee || 0, distanceFee || 0, 0);
+        }
+
         const commission = Number(earning.commission_amount ?? 0);
-        const net = earning.net_amount !== null && earning.net_amount !== undefined
+        const netFromDb = (earning.net_amount !== null && earning.net_amount !== undefined)
           ? Number(earning.net_amount)
-          : (gross - commission);
+          : NaN;
+        let net = (isFinite(netFromDb) && netFromDb > 0)
+          ? netFromDb
+          : Math.max(gross - commission, 0);
+        // نهائي: إذا بقي صفر أو أقل بينما gross>0، اعرض gross لضمان عدم إظهار 0 خطأً
+        if (!isFinite(net) || net <= 0) {
+          net = gross > 0 ? gross : 0;
+        }
 
         return {
           id: earning.id,
           order_number: order?.order_number || 'غير معروف',
-          amount: net, // display NET amount
+          amount: net, // display NET amount with UI fallback
           net_amount: net,
           commission_amount: commission,
-          earned_at: earning.earned_at,
+          earned_at: earning.earned_at || earning.created_at,
           customer_name: customer?.full_name || 'عميل',
         };
       });
 
+      try {
+        console.log('[EARNINGS] processed sample:', processedEarnings[0]);
+        console.log('[EARNINGS] totals today/week/month/all before set:',
+          processedEarnings.reduce((s, e) => s + e.amount, 0)
+        );
+      } catch {}
       setEarnings(processedEarnings);
 
       // حساب الإحصائيات

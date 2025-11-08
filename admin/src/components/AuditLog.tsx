@@ -1,20 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
-interface AuditLogEntry {
+interface AdminActivityLogEntry {
   id: string;
-  admin_id: string;
-  action: string;
-  table_name: string;
-  record_id: string;
-  old_values: Record<string, any> | null;
-  new_values: Record<string, any> | null;
+  admin_id: string | null;
+  action: 'create' | 'update' | 'delete' | 'system' | string;
+  resource_type: string | null;
+  resource_id: string | null;
+  details: Record<string, any> | null;
   timestamp: string;
-  admin_name: string;
+  admin_name?: string;
 }
 
 const AuditLog: React.FC = () => {
-  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  const [logs, setLogs] = useState<AdminActivityLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dateFilter, setDateFilter] = useState('7'); // Last 7 days
@@ -31,23 +30,25 @@ const AuditLog: React.FC = () => {
       fromDate.setDate(fromDate.getDate() - daysAgo);
       
       const { data, error } = await supabase
-        .from('audit_log')
-        .select(`
-          *,
-          profiles:profiles!audit_log_user_id_fkey(full_name)
-        `)
+        .from('admin_activity_log')
+        .select('*')
         .gte('timestamp', fromDate.toISOString())
         .order('timestamp', { ascending: false })
         .limit(100);
 
       if (error) throw error;
 
-      const transformedData = data?.map(log => ({
-        ...log,
-        admin_name: log.profiles?.full_name || 'Unknown'
-      })) || [];
-
-      setLogs(transformedData);
+      const baseLogs = (data || []) as AdminActivityLogEntry[];
+      const ids = Array.from(new Set(baseLogs.map(l => l.admin_id).filter(Boolean))) as string[];
+      let nameMap: Record<string, string> = {};
+      if (ids.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', ids);
+        (profs || []).forEach((p: any) => { nameMap[p.id] = p.full_name; });
+      }
+      setLogs(baseLogs.map(l => ({ ...l, admin_name: l.admin_id ? (nameMap[l.admin_id] || 'Unknown') : 'System' })));
     } catch (err: any) {
       setError(err.message || 'حدث خطأ أثناء جلب سجل التدقيق');
     } finally {
@@ -57,20 +58,23 @@ const AuditLog: React.FC = () => {
 
   const getActionText = (action: string) => {
     switch (action) {
-      case 'INSERT': return 'إضافة';
-      case 'UPDATE': return 'تعديل';
-      case 'DELETE': return 'حذف';
+      case 'create': return 'إضافة';
+      case 'update': return 'تعديل';
+      case 'delete': return 'حذف';
+      case 'system': return 'نظام';
       default: return action;
     }
   };
 
-  const getTableText = (tableName: string) => {
-    switch (tableName) {
+  const getResourceText = (resourceType: string | null) => {
+    switch (resourceType) {
       case 'profiles': return 'المستخدمون';
       case 'orders': return 'الطلبات';
       case 'merchants': return 'التجار';
       case 'driver_profiles': return 'السائقون';
-      default: return tableName;
+      case 'platform_settings': return 'إعدادات المنصة';
+      case 'platform_ad_settings': return 'إعدادات الإعلانات';
+      default: return resourceType || 'غير محدد';
     }
   };
 
@@ -126,7 +130,7 @@ const AuditLog: React.FC = () => {
                 الإجراء
               </th>
               <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                الجدول
+                المورد
               </th>
               <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 التفاصيل
@@ -145,28 +149,29 @@ const AuditLog: React.FC = () => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      log.action === 'INSERT' ? 'bg-green-100 text-green-800' :
-                      log.action === 'UPDATE' ? 'bg-blue-100 text-blue-800' :
-                      log.action === 'DELETE' ? 'bg-red-100 text-red-800' :
+                      log.action === 'create' ? 'bg-green-100 text-green-800' :
+                      log.action === 'update' ? 'bg-blue-100 text-blue-800' :
+                      log.action === 'delete' ? 'bg-red-100 text-red-800' :
+                      log.action === 'system' ? 'bg-purple-100 text-purple-800' :
                       'bg-gray-100 text-gray-800'
                     }`}>
                       {getActionText(log.action)}
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {getTableText(log.table_name)}
+                    {getResourceText(log.resource_type)}
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
-                    {log.record_id && (
+                    {log.resource_id && (
                       <div>
-                        <span className="font-medium">ID:</span> {log.record_id}
+                        <span className="font-medium">ID:</span> {log.resource_id}
                       </div>
                     )}
-                    {log.new_values && Object.keys(log.new_values).length > 0 && (
+                    {log.details && Object.keys(log.details).length > 0 && (
                       <div className="mt-1">
-                        <span className="font-medium">القيم الجديدة:</span>
+                        <span className="font-medium">التفاصيل:</span>
                         <div className="max-w-xs truncate">
-                          {Object.entries(log.new_values).map(([key, value]) => (
+                          {Object.entries(log.details).map(([key, value]) => (
                             <span key={key} className="mr-2">
                               {key}: {String(value)}
                             </span>

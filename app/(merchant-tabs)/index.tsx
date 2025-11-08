@@ -149,7 +149,7 @@ export default function MerchantDashboard() {
       let orders: any[] = [];  // ✅ تعريف النوع
       let ordersQuery = supabase
         .from('orders')
-        .select('id, status, total, created_at, store_id')
+        .select('id, status, total, customer_total, delivery_fee, service_fee, product_total, subtotal, tax_amount, tax, created_at, store_id')
         .in('merchant_id', allStoreIds);  // ✅ يبحث في جميع متاجره
       
       if (isAllStoresSelected && stores.length > 0) {
@@ -170,8 +170,8 @@ export default function MerchantDashboard() {
       console.log(`📊 [Dashboard] Orders stats: total=${totalOrders}, pending=${pendingOrders}`);
 
       // حساب الإيرادات
-      // ✅ الحالات التي تُحتسب إيرادات
-      const revenueStatuses = ['accepted', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+      // ✅ لا تُحتسب الإيرادات إلا بعد التسليم الفعلي
+      const revenueStatuses = ['delivered'];
       
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -182,10 +182,24 @@ export default function MerchantDashboard() {
         return orderDate.getTime() === today.getTime() && revenueStatuses.includes(o.status);
       }) || [];
 
-      const todayRevenue = todayOrders.reduce((sum, o) => sum + (parseFloat(o.total?.toString() || '0') || 0), 0);
+      // حساب حصة التاجر فقط = إجمالي العميل - (رسوم التوصيل + رسوم الخدمة)
+      // نعتمد على customer_total وإن لم تتوفر فنستخدم total
+      const todayRevenue = todayOrders.reduce((sum, o) => {
+        const customerTotal = parseFloat(o.customer_total?.toString() || o.total?.toString() || '0') || 0;
+        const deliveryFee = parseFloat(o.delivery_fee?.toString() || '0') || 0;
+        const serviceFee = parseFloat(o.service_fee?.toString() || '0') || 0;
+        const merchantShare = Math.max(customerTotal - deliveryFee - serviceFee, 0);
+        return sum + merchantShare;
+      }, 0);
       
       const completedOrders = orders?.filter(o => revenueStatuses.includes(o.status)) || [];
-      const totalRevenue = completedOrders.reduce((sum, o) => sum + (parseFloat(o.total?.toString() || '0') || 0), 0);
+      const totalRevenue = completedOrders.reduce((sum, o) => {
+        const customerTotal = parseFloat(o.customer_total?.toString() || o.total?.toString() || '0') || 0;
+        const deliveryFee = parseFloat(o.delivery_fee?.toString() || '0') || 0;
+        const serviceFee = parseFloat(o.service_fee?.toString() || '0') || 0;
+        const merchantShare = Math.max(customerTotal - deliveryFee - serviceFee, 0);
+        return sum + merchantShare;
+      }, 0);
 
       console.log(`💰 [Dashboard] Revenue: today=${todayRevenue}, total=${totalRevenue}, completed orders=${completedOrders.length}`);
 

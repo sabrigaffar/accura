@@ -14,6 +14,9 @@ import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { Car, CreditCard, Calendar } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadToKyc } from '@/lib/imageUpload';
+import { Image } from 'react-native';
 
 // أنواع المركبات المتاحة
 const VEHICLE_TYPES = [
@@ -31,6 +34,8 @@ export default function SetupDriverScreen() {
   const [licenseNumber, setLicenseNumber] = useState('');
   const [licenseExpiry, setLicenseExpiry] = useState('');
   const [loading, setLoading] = useState(false);
+  const [idImageUri, setIdImageUri] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState(false);
 
   const createDriverProfile = async () => {
     // التحقق من صحة البيانات
@@ -59,9 +64,25 @@ export default function SetupDriverScreen() {
       return;
     }
 
+    if (!idImageUri) {
+      Alert.alert('مطلوب', 'يرجى رفع صورة البطاقة الشخصية أو الإقامة');
+      return;
+    }
+
     setLoading(true);
 
     try {
+      // رفع صورة الهوية إلى مخزن خاص
+      let idPath: string | null = null;
+      if (idImageUri && user?.id) {
+        setUploadingId(true);
+        idPath = await uploadToKyc(idImageUri, user.id, 'drivers');
+        setUploadingId(false);
+        if (!idPath) {
+          throw new Error('فشل رفع صورة البطاقة الشخصية. حاول مرة أخرى.');
+        }
+      }
+
       // إنشاء سجل في جدول driver_profiles
       const { data, error } = await supabase
         .from('driver_profiles')
@@ -75,6 +96,7 @@ export default function SetupDriverScreen() {
           license_expiry: licenseExpiry,
           is_verified: false, // سيتم التحقق لاحقاً
           is_online: false,
+          id_image_url: idPath,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
@@ -103,14 +125,14 @@ export default function SetupDriverScreen() {
 
       setLoading(false);
       Alert.alert(
-        'تم بنجاح',
-        'تم إنشاء ملف السائق بنجاح',
+        'تم استلام طلبك',
+        'تم إرسال بياناتك لمراجعة الإدارة. سنخبرك فور الموافقة.',
         [
           {
             text: 'متابعة',
             onPress: () => {
               setTimeout(() => {
-                router.replace('/(driver-tabs)');
+                router.replace('/auth/waiting-approval' as any);
               }, 100);
             },
           },
@@ -225,6 +247,39 @@ export default function SetupDriverScreen() {
           </View>
         </View>
 
+        {/* رفع صورة الهوية الوطنية/الإقامة */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>📄 صورة الهوية (مطلوبة)</Text>
+          <TouchableOpacity
+            style={[styles.button, loading && styles.buttonDisabled]}
+            onPress={async () => {
+              try {
+                const result = await ImagePicker.launchImageLibraryAsync({
+                  mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                  allowsEditing: true,
+                  aspect: [3, 2],
+                  quality: 0.8,
+                });
+                if (!result.canceled && result.assets[0]) {
+                  setIdImageUri(result.assets[0].uri);
+                }
+              } catch (e) {
+                Alert.alert('خطأ', 'تعذر فتح معرض الصور');
+              }
+            }}
+            disabled={loading}
+          >
+            <Text style={styles.buttonText}>{idImageUri ? 'تغيير صورة الهوية' : 'اختيار صورة الهوية'}</Text>
+          </TouchableOpacity>
+          {!!idImageUri && (
+            <View style={{ marginTop: spacing.sm }}>
+              <Image source={{ uri: idImageUri }} style={{ width: '100%', height: 160, borderRadius: 8 }} />
+              {uploadingId && <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xs }} />}
+              <Text style={styles.helperText}>لن تظهر للعامة. تُستخدم فقط للتحقق.</Text>
+            </View>
+          )}
+        </View>
+
         <TouchableOpacity
           style={[styles.button, loading && styles.buttonDisabled]}
           onPress={createDriverProfile}
@@ -335,5 +390,11 @@ const styles = StyleSheet.create({
   buttonText: {
     ...typography.bodyMedium,
     color: colors.white,
+  },
+  helperText: {
+    ...typography.caption,
+    color: colors.textLight,
+    marginTop: spacing.xs,
+    textAlign: 'right',
   },
 });

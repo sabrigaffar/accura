@@ -69,10 +69,25 @@ export default function LoginScreen() {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   };
 
+  // تطبيع أرقام مصر إلى E.164 (+20)
+  const normalizePhoneEG = (input: string) => {
+    let p = (input || '').trim().replace(/\s+/g, '');
+    if (!p) return p;
+    // 0020 -> +20
+    if (p.startsWith('0020')) p = '+' + p.slice(2);
+    // 020xxxx -> +20xxxx (نادر لكن للاكتمال)
+    if (!p.startsWith('+') && p.startsWith('20')) p = '+' + p;
+    // 01xxxxxxxxx -> +201xxxxxxxx
+    if (!p.startsWith('+') && /^01\d{9}$/.test(p)) p = '+20' + p.slice(1);
+    // إن بقيت أرقام بدون + ونطاق 10-15 رقم، أضف + للاكتمال
+    if (!p.startsWith('+') && /^\d{10,15}$/.test(p)) p = '+' + p;
+    return p;
+  };
+
   const isValidPhone = (phone: string) => {
-    // يقبل أرقام بصيغة +966xxxxxxxxx أو 05xxxxxxxx
-    const cleanPhone = phone.replace(/\s/g, '');
-    return /^(\+?\d{10,15}|0\d{9,10})$/.test(cleanPhone);
+    const p = normalizePhoneEG(phone);
+    // قبول أرقام E.164 عامة، مع ضمان أننا طبّعنا مصر
+    return /^\+\d{10,15}$/.test(p);
   };
 
   const handleLogin = async () => {
@@ -99,6 +114,8 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
+      // تأكد من إنهاء أي جلسة قديمة قبل محاولة تسجيل الدخول لتفادي 'Invalid Refresh Token'
+      try { await supabase.auth.signOut(); } catch (_) {}
       let signInData;
 
       if (isEmail) {
@@ -114,19 +131,38 @@ export default function LoginScreen() {
         // تسجيل الدخول برقم الهاتف
         // تنسيق رقم الهاتف
         let formattedPhone = identifier.trim();
-        if (formattedPhone.startsWith('05')) {
-          formattedPhone = '+966' + formattedPhone.substring(1);
-        } else if (!formattedPhone.startsWith('+')) {
-          formattedPhone = '+' + formattedPhone;
-        }
+        formattedPhone = normalizePhoneEG(formattedPhone);
 
-        const { data, error } = await supabase.auth.signInWithPassword({
-          phone: formattedPhone,
-          password: password,
-        });
-        
-        if (error) throw error;
-        signInData = data;
+        // محاولة 1: تسجيل بالهاتف مباشرة (إن كان مزود الهوية يدعمه)
+        let phoneLoginOk = false;
+        try {
+          const { data, error } = await supabase.auth.signInWithPassword({
+            phone: formattedPhone,
+            password: password,
+          });
+          if (error) throw error;
+          signInData = data;
+          phoneLoginOk = true;
+        } catch (e1: any) {
+          // محاولة 2: حل البريد المقابل للهاتف ثم تسجيل بالبريد+كلمة المرور
+          try {
+            const { data: resolvedEmail, error: rErr } = await supabase.rpc('resolve_email_by_phone', { p_phone: formattedPhone });
+            if (rErr) throw rErr;
+            if (resolvedEmail && typeof resolvedEmail === 'string') {
+              const { data: byEmail, error: e2 } = await supabase.auth.signInWithPassword({
+                email: resolvedEmail,
+                password: password,
+              });
+              if (e2) throw e2;
+              signInData = byEmail;
+              phoneLoginOk = true;
+            } else {
+              throw e1;
+            }
+          } catch (e2) {
+            throw e1; // ارفع الخطأ الأصلي لرسائل أوضح للمستخدم
+          }
+        }
       }
 
       // حفظ تفضيلات "تذكرني"
@@ -142,8 +178,68 @@ export default function LoginScreen() {
         await AsyncStorage.removeItem('savedLoginType');
       }
 
-      // التوجيه إلى الجذر ليقوم index.tsx / RoleNavigator بتحديد الواجهة حسب نوع المستخدم
-      router.replace('/');
+      // نظّف أي أعلام توثيق متبقية من محاولات سابقة
+      try { await AsyncStorage.setItem('kyc_merchant_from_signup', 'false'); } catch {}
+
+      // فحص سريع لحالة الموافقة لمنع وميض واجهة العميل قبل التوجيه لشاشة الانتظار
+      let uid: string | null = null;
+      try {
+        uid = (signInData as any)?.user?.id ?? null;
+        if (!uid) {
+          const { data: u } = await supabase.auth.getUser();
+          uid = u.user?.id ?? null;
+        }
+      } catch {}
+
+      if (uid) {
+        try {
+          const [{ data: dp }, { data: mp }, { data: ms }] = await Promise.all([
+            supabase.from('driver_profiles').select('approval_status').eq('id', uid).maybeSingle(),
+            supabase.from('merchant_profiles').select('approval_status').eq('owner_id', uid).maybeSingle(),
+            supabase.from('merchants').select('approval_status').eq('owner_id', uid),
+          ]);
+          const msList = (ms || []) as Array<{ approval_status: string }>;
+          const pend = (dp?.approval_status === 'pending') || (mp?.approval_status === 'pending') || msList.some(m => m.approval_status === 'pending');
+          const rej = (dp?.approval_status === 'rejected') || (mp?.approval_status === 'rejected') || msList.some(m => m.approval_status === 'rejected');
+          if (pend || rej) {
+            router.replace('/auth/waiting-approval' as any);
+            return;
+          }
+
+          // تحديد الواجهة المناسبة مباشرة بعد تسجيل الدخول
+          let effective: 'customer' | 'merchant' | 'driver' = 'customer';
+          try {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('user_type')
+              .eq('id', uid)
+              .maybeSingle();
+            if (prof?.user_type) effective = prof.user_type as any;
+          } catch {}
+
+          const msApproved = msList.some(m => m.approval_status === 'approved');
+          if (mp?.approval_status === 'approved' || msApproved) {
+            effective = 'merchant';
+          } else if (dp?.approval_status === 'approved') {
+            effective = 'driver';
+          }
+
+          const targetRoot = effective === 'merchant'
+            ? '/(merchant-tabs)'
+            : effective === 'driver'
+              ? '/(driver-tabs)'
+              : '/(customer-tabs)';
+
+          console.log('[Login] redirect', { effective, targetRoot });
+          router.replace(targetRoot as any);
+          return;
+        } catch {
+          // في حال فشل الفحص، تابع بالتوجيه الافتراضي وسيقوم RoleNavigator بالحماية لاحقاً
+        }
+      }
+
+      // وجّه إلى مجموعة تبويبات مبدئية، وRoleNavigator سيصحح الوجهة حسب نوع المستخدم
+      router.replace('/(customer-tabs)');
       
     } catch (error: any) {
       console.error('Login error:', error);
@@ -245,7 +341,7 @@ export default function LoginScreen() {
                 placeholder={
                   loginType === 'email'
                     ? 'example@email.com'
-                    : '+966xxxxxxxxx أو 05xxxxxxxx'
+                    : '+2010xxxxxxx أو 01xxxxxxxxx'
                 }
                 placeholderTextColor={colors.textLight}
                 value={identifier}

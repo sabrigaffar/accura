@@ -2,10 +2,12 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useActiveStore } from '@/contexts/ActiveStoreContext';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 
 export default function MerchantWalletScreen() {
   const { user } = useAuth();
+  const { activeStore, isAllStoresSelected, stores } = useActiveStore();
   const [balance, setBalance] = React.useState<number>(0);
   const [currency, setCurrency] = React.useState<string>('EGP');
   const [txs, setTxs] = React.useState<any[]>([]);
@@ -14,21 +16,51 @@ export default function MerchantWalletScreen() {
 
   const fetchWallet = async () => {
     try {
-      if (!user?.id) return;
-      await supabase.rpc('create_wallet_if_missing', { p_owner: user.id, p_type: 'merchant', p_trial_days: 30 });
-      const { data: w } = await supabase
+      if (!user?.id) {
+        console.log('💰 [Wallet] No user ID');
+        return;
+      }
+      console.log('💰 [Wallet] Fetching wallet for user:', user.id);
+      
+      // Ensure user wallet exists
+      await supabase.rpc('create_wallet_if_missing', { 
+        p_owner: user.id, 
+        p_type: 'merchant', 
+        p_trial_days: 30 
+      });
+
+      // Load USER wallet (shared across all stores)
+      const { data: wallet, error: walletError } = await supabase
         .from('wallets')
-        .select('id, balance, currency')
-        .eq('owner_id', user.id)
+        .select('id, owner_id, balance, currency')
         .eq('owner_type', 'merchant')
-        .maybeSingle();
-      if (w) { setBalance(w.balance || 0); setCurrency(w.currency || 'EGP'); }
-      const { data: t } = await supabase
-        .from('wallet_transactions')
-        .select('id, type, amount, memo, related_order_id, created_at')
-        .order('created_at', { ascending: false })
-        .limit(100);
-      setTxs(t || []);
+        .eq('owner_id', user.id)
+        .single();
+
+      if (walletError) {
+        console.error('💰 [Wallet] Error loading wallet:', walletError);
+        setBalance(0); setTxs([]); setCurrency('EGP');
+        return;
+      }
+
+      console.log('💰 [Wallet] User wallet:', wallet);
+      console.log('💰 [Wallet] Balance:', wallet?.balance || 0);
+      
+      setBalance(Number(wallet?.balance) || 0);
+      setCurrency(wallet?.currency || 'EGP');
+
+      // Load transactions for user wallet
+      if (wallet) {
+        const { data: t } = await supabase
+          .from('wallet_transactions')
+          .select('id, type, amount, memo, related_order_id, created_at')
+          .eq('wallet_id', wallet.id)
+          .order('created_at', { ascending: false })
+          .limit(100);
+        setTxs(t || []);
+      } else {
+        setTxs([]);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -41,9 +73,9 @@ export default function MerchantWalletScreen() {
   return (
     <ScrollView style={styles.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
       <View style={styles.card}>
-        <Text style={styles.title}>محفظة التاجر</Text>
+        <Text style={styles.title}>محنفظتي</Text>
         <Text style={styles.balance}>{balance.toFixed(2)} {currency}</Text>
-        <Text style={styles.note}>الاشتراك الشهري 100 جنيه لكل متجر بعد انتهاء الفترة التجريبية. سيتم إيقاف الظهور عند عدم السداد.</Text>
+        <Text style={styles.note}>محفظتك موحدة لجميع متاجرك. يمكنك استخدام الرصيد للإعلانات المموّلة والاشتراكات.</Text>
       </View>
 
       <View style={styles.card}>

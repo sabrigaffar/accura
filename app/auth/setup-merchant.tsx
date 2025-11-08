@@ -16,7 +16,7 @@ import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { ShoppingBag, MapPin, Clock, Upload, Image as ImageIcon, Phone } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadSingleImage } from '@/lib/imageUpload';
+import { uploadSingleImage, uploadToKyc } from '@/lib/imageUpload';
 
 // أنواع الفئات المتاحة للتاجر
 const MERCHANT_CATEGORIES = [
@@ -39,6 +39,10 @@ export default function SetupMerchantScreen() {
   const [bannerUri, setBannerUri] = useState<string | null>(null);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
+  // KYC أصبح في خطوة منفصلة أثناء التسجيل (auth/kyc-merchant)
+  const [idDocumentUri, setIdDocumentUri] = useState<string | null>(null);
+  const [commercialRecordUri, setCommercialRecordUri] = useState<string | null>(null);
+  const [uploadingKyc, setUploadingKyc] = useState(false);
 
   const pickImage = async (type: 'logo' | 'banner') => {
     try {
@@ -84,12 +88,16 @@ export default function SetupMerchantScreen() {
       return;
     }
 
+    // KYC يُطلب عند التسجيل فقط، لا تشترط مستندات هنا
+
     setLoading(true);
 
     try {
       // رفع الصور إذا كانت موجودة
       let logoUrl = null;
       let bannerUrl = null;
+      let idDocPath: string | null = null;
+      let crDocPath: string | null = null;
 
       if (logoUri) {
         setUploadingLogo(true);
@@ -103,6 +111,8 @@ export default function SetupMerchantScreen() {
         setUploadingBanner(false);
       }
 
+      // لا ترفع مستندات KYC هنا؛ تمت معالجتها في auth/kyc-merchant
+
       // إنشاء سجل في جدول merchants
       const { data, error } = await supabase
         .from('merchants')
@@ -115,7 +125,8 @@ export default function SetupMerchantScreen() {
           phone_number: phoneNumber,
           logo_url: logoUrl,
           banner_url: bannerUrl,
-          is_active: true,
+          is_active: false, // يفعّل بعد موافقة الإدارة
+          // لا ترسل حقول KYC هنا
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
@@ -144,14 +155,14 @@ export default function SetupMerchantScreen() {
 
       setLoading(false);
       Alert.alert(
-        'تم بنجاح',
-        'تم إنشاء ملف المتجر بنجاح',
+        'تم استلام طلبك',
+        'تم إرسال مستندات المتجر لمراجعة الإدارة. سنخبرك فور الموافقة.',
         [
           {
             text: 'متابعة',
             onPress: () => {
               setTimeout(() => {
-                router.replace('/(merchant-tabs)');
+                router.replace('/auth/waiting-approval' as any);
               }, 100);
             },
           },
@@ -264,6 +275,8 @@ export default function SetupMerchantScreen() {
             />
           </View>
         </View>
+
+        {/* تمت إزالة قسم مستندات KYC هنا لأن التوثيق يتم أثناء التسجيل في /auth/kyc-merchant */}
 
         <View style={styles.inputContainer}>
           <Text style={styles.label}>📞 رقم هاتف المتجر</Text>
@@ -434,6 +447,12 @@ const styles = StyleSheet.create({
   buttonText: {
     ...typography.bodyMedium,
     color: colors.white,
+  },
+  helperText: {
+    ...typography.caption,
+    color: colors.textLight,
+    marginTop: spacing.xs,
+    textAlign: 'right',
   },
   imageUploadButton: {
     borderWidth: 1,

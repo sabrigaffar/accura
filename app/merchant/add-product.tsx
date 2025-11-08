@@ -157,7 +157,7 @@ export default function AddProductScreen() {
       if (error) {
         if ((error as any).code === 'PGRST205') {
           // لا يوجد جدول products -> استخدم الجدول القديم merchant_products
-          const legacyPayload: any = {
+          const legacyPayloadBase: any = {
             merchant_id: selectedStore.id, // في الجدول القديم يشير إلى معرف المتجر
             name_ar: insertPayload.name,
             description_ar: insertPayload.description,
@@ -166,13 +166,74 @@ export default function AddProductScreen() {
             category: insertPayload.category,
             is_available: true,
           };
-          const retryLegacy = await supabase
-            .from('merchant_products')
-            .insert(legacyPayload)
-            .select()
-            .single();
-          if (retryLegacy.error) throw retryLegacy.error;
-          data = retryLegacy.data as any;
+
+          // نحاول حفظ الكمية في عمود متوفر (stock أو available_quantity أو quantity)
+          const quantityValue = parseInt(quantity);
+          let legacyData: any = null;
+          let lastErr: any = null;
+          const isMissingColumn = (err: any) => {
+            const code = (err as any)?.code;
+            const msg = ((err as any)?.message || '').toString();
+            return code === '42703' || code === 'PGRST204' || /schema cache|does not exist|unknown column/i.test(msg);
+          };
+
+          // 1) stock
+          try {
+            const try1Payload = { ...legacyPayloadBase, stock: quantityValue };
+            const res1 = await supabase
+              .from('merchant_products')
+              .insert(try1Payload)
+              .select()
+              .single();
+            if (res1.error) throw res1.error;
+            legacyData = res1.data;
+          } catch (e: any) {
+            lastErr = e;
+            // 2) available_quantity
+            if (isMissingColumn(e)) {
+              try {
+                const try2Payload = { ...legacyPayloadBase, available_quantity: quantityValue };
+                const res2 = await supabase
+                  .from('merchant_products')
+                  .insert(try2Payload)
+                  .select()
+                  .single();
+                if (res2.error) throw res2.error;
+                legacyData = res2.data;
+              } catch (e2: any) {
+                lastErr = e2;
+                // 3) quantity
+                if (isMissingColumn(e2)) {
+                  const try3Payload = { ...legacyPayloadBase, quantity: quantityValue };
+                  const res3 = await supabase
+                    .from('merchant_products')
+                    .insert(try3Payload)
+                    .select()
+                    .single();
+                  if (res3.error) {
+                    // 4) أخيراً: بدون عمود كمية
+                    const res4 = await supabase
+                      .from('merchant_products')
+                      .insert(legacyPayloadBase)
+                      .select()
+                      .single();
+                    if (res4.error) throw res4.error;
+                    legacyData = res4.data;
+                  } else {
+                    legacyData = res3.data;
+                  }
+                } else {
+                  // لم يكن خطأ 42703، أعد الرمي
+                  throw e2;
+                }
+              }
+            } else {
+              // لم يكن خطأ 42703، أعد الرمي
+              throw e;
+            }
+          }
+
+          data = legacyData as any;
         } else {
           throw error;
         }

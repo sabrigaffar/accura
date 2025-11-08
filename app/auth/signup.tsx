@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { Package, User, Phone, Lock, ShoppingBag, Car, Users, Mail } from 'lucide-react-native';
@@ -71,15 +72,33 @@ export default function SignUpScreen() {
   const [userType, setUserType] = useState<UserType>('customer');
   const [loading, setLoading] = useState(false);
   const [selectedCountry, setSelectedCountry] = useState({
-    code: '+966',
-    name: 'السعودية',
-    flag: 'SA'
+    code: '+20',
+    name: 'مصر',
+    flag: 'EG'
   });
   
   // حالة OTP
   const [showOtpInput, setShowOtpInput] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [tempUserData, setTempUserData] = useState<any>(null);
+
+  // عند تحميل الشاشة، إن كان هناك تدفّق OTP قيد التنفيذ استرجعه
+  useEffect(() => {
+    (async () => {
+      try {
+        const otpPending = await AsyncStorage.getItem('otp_pending_signup');
+        if (otpPending === 'true') {
+          const savedEmail = await AsyncStorage.getItem('signup_email');
+          const savedTemp = await AsyncStorage.getItem('signup_temp_data');
+          if (savedEmail) setEmail(savedEmail);
+          if (savedTemp) {
+            try { setTempUserData(JSON.parse(savedTemp)); } catch {}
+          }
+          setShowOtpInput(true);
+        }
+      } catch {}
+    })();
+  }, []);
 
   const signUp = async () => {
     // التحقق من صحة البيانات
@@ -134,29 +153,36 @@ export default function SignUpScreen() {
           data: {
             full_name: fullName.trim(),
             role: userType,
+            user_type: userType,
           },
         },
       };
 
-      // إضافة رقم الهاتف إذا كان موجوداً
+      // إضافة رقم الهاتف إلى user_metadata فقط (بدون إنشاء هوية هاتف في Supabase Auth)
       if (formattedPhone) {
-        signUpData.phone = formattedPhone;
         signUpData.options.data.phone = formattedPhone;
       }
 
       if (formattedPhone) {
-        const { data: existing, error: existingError } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('phone_number', formattedPhone)
-          .limit(1)
-          .maybeSingle();
-        if (!existingError && existing) {
-          setLoading(false);
-          Alert.alert('خطأ', 'رقم الهاتف مستخدم بالفعل. الرجاء استخدام رقم آخر.');
-          return;
+        try {
+          const { data: resolvedEmail, error: rErr } = await supabase.rpc('resolve_email_by_phone', { p_phone: formattedPhone });
+          if (rErr) {
+            console.warn('resolve_email_by_phone error, fallback to blind attempt', rErr);
+          }
+          if (resolvedEmail && typeof resolvedEmail === 'string') {
+            setLoading(false);
+            Alert.alert('خطأ', 'رقم الهاتف مستخدم بالفعل. الرجاء استخدام رقم آخر.');
+            return;
+          }
+        } catch (e) {
+          console.warn('resolve_email_by_phone exception', e);
         }
       }
+
+      // تأكد من تعطيل أي تسجيل خروج قسري عند الإطلاق
+      try { await AsyncStorage.setItem('logout_on_next_launch', 'false'); } catch {}
+      // ضع علماً قبل محاولة signUp حتى لا يعيدنا أي مستمع global إلى /auth/login
+      try { await AsyncStorage.setItem('otp_pending_signup', 'true'); } catch {}
 
       const { data, error } = await supabase.auth.signUp(signUpData);
 
@@ -189,9 +215,15 @@ export default function SignUpScreen() {
       };
       console.log('Saving tempUserData:', tempData);
       setTempUserData(tempData);
+      try {
+        await AsyncStorage.setItem('signup_temp_data', JSON.stringify(tempData));
+        await AsyncStorage.setItem('signup_email', email.trim());
+      } catch {}
 
       // إظهار مربع OTP
       setShowOtpInput(true);
+      // ضع علماً يمنع التحويلات التلقائية أثناء إدخال OTP
+      try { await AsyncStorage.setItem('otp_pending_signup', 'true'); } catch {}
       setLoading(false);
       
       Alert.alert(
@@ -212,6 +244,12 @@ export default function SignUpScreen() {
       }
       
       Alert.alert('خطأ في التسجيل', errorMessage);
+      // فشل التسجيل: أزل علم OTP وبياناته حتى لا نبقى عالقين على صفحة التسجيل
+      try {
+        await AsyncStorage.setItem('otp_pending_signup', 'false');
+        await AsyncStorage.removeItem('signup_temp_data');
+        await AsyncStorage.removeItem('signup_email');
+      } catch {}
     } finally {
       setLoading(false);
     }
@@ -290,6 +328,13 @@ export default function SignUpScreen() {
         ? 'مرحباً بك! يرجى إكمال معلومات السائق لبدء استلام الطلبات.'
         : 'مرحباً بك! تم إنشاء حسابك بنجاح.';
 
+      // إزالة علم OTP وبياناته لأن العملية انتهت بنجاح
+      try {
+        await AsyncStorage.setItem('otp_pending_signup', 'false');
+        await AsyncStorage.removeItem('signup_temp_data');
+        await AsyncStorage.removeItem('signup_email');
+      } catch {}
+
       Alert.alert(
         'تم التحقق بنجاح! 🎉',
         welcomeMessage,
@@ -301,7 +346,11 @@ export default function SignUpScreen() {
               setTimeout(() => {
                 // التوجيه حسب نوع المستخدم
                 if (tempUserData?.userType === 'merchant') {
-                  router.replace('/auth/setup-merchant' as any);
+                  try {
+                    AsyncStorage.setItem('kyc_merchant_from_signup', 'true').catch(() => {});
+                    AsyncStorage.setItem('kyc_merchant_from_signup_at', String(Date.now())).catch(() => {});
+                  } catch {}
+                  router.replace('/auth/kyc-merchant' as any);
                 } else if (tempUserData?.userType === 'driver') {
                   router.replace('/auth/setup-driver' as any);
                 } else {

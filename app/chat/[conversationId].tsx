@@ -34,7 +34,13 @@ interface Message {
 }
 
 export default function ChatScreen() {
-  const { conversationId, driverPhone } = useLocalSearchParams<{ conversationId?: string; driverPhone?: string }>();
+  const { conversationId, driverPhone, customerPhone } = useLocalSearchParams<{ conversationId?: string; driverPhone?: string; customerPhone?: string }>();
+  // اختر رقم الاتصال المناسب: أولوية لرقم العميل إن وُجد، وإلا رقم السائق
+  const contactPhone = (typeof customerPhone === 'string' && customerPhone)
+    ? customerPhone
+    : (typeof driverPhone === 'string' && driverPhone)
+      ? driverPhone
+      : '';
 
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -252,10 +258,10 @@ export default function ChatScreen() {
         <TouchableOpacity 
           style={styles.callButton}
           onPress={() => {
-            if (typeof driverPhone === 'string' && driverPhone) {
-              Linking.openURL(`tel:${driverPhone}`);
+            if (contactPhone) {
+              Linking.openURL(`tel:${contactPhone}`);
             } else {
-              Alert.alert('خطأ', 'رقم السائق غير متوفر');
+              Alert.alert('خطأ', 'رقم الاتصال غير متوفر');
             }
           }}
         >

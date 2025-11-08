@@ -74,23 +74,26 @@ export default function MerchantAnalytics() {
 
       const storeIds = merchantStores.map(s => s.id);
 
-      // ✅ جلب الطلبات مع customer_total الصحيح
+      // ✅ جلب الطلبات مع الحقول اللازمة لحساب حصة التاجر فقط
       const { data: orders } = await supabase
         .from('orders')
-        .select('id, status, total, customer_total, created_at')
+        .select('id, status, total, customer_total, delivery_fee, service_fee, created_at')
         .in('merchant_id', storeIds);
 
-      // ✅ الحالات المكتملة
-      const revenueStatuses = ['accepted', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+      // ✅ الإيراد يُحتسب بعد التسليم فقط
+      const revenueStatuses = ['delivered'];
       
       const completedOrders = orders?.filter(o => 
         revenueStatuses.includes(o.status)
       ) || [];
 
-      // استخدام customer_total (الأولوية) أو total كبديل احتياطي
-      const totalRevenue = completedOrders.reduce((sum, order) => {
-        const amount = order.customer_total ?? order.total ?? 0;
-        return sum + (parseFloat(amount.toString()) || 0);
+      // استخدام حصة التاجر فقط = إجمالي العميل - (رسوم التوصيل + رسوم المنصة)
+      const totalRevenue = completedOrders.reduce((sum, order: any) => {
+        const customerTotal = parseFloat(order.customer_total?.toString() || order.total?.toString() || '0') || 0;
+        const deliveryFee = parseFloat(order.delivery_fee?.toString() || '0') || 0;
+        const serviceFee = parseFloat(order.service_fee?.toString() || '0') || 0;
+        const merchantShare = Math.max(customerTotal - deliveryFee - serviceFee, 0);
+        return sum + merchantShare;
       }, 0);
 
       const averageOrderValue = completedOrders.length > 0 

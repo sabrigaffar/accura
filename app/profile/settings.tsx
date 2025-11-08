@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Switch, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Switch, ScrollView, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
 
 export default function SettingsScreen() {
   const [darkMode, setDarkMode] = useState(false);
@@ -48,6 +49,13 @@ export default function SettingsScreen() {
               onValueChange={(v) => { setMarketing(v); save({ darkMode, marketing: v }); }}
             />
           </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>الدعم</Text>
+          <TouchableOpacity style={styles.item} onPress={() => router.push('/profile/complaints' as any)}>
+            <Text style={styles.itemText}>الشكاوى</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>

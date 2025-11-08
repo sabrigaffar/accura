@@ -22,13 +22,23 @@ export default function CustomerWalletScreen() {
         .eq('owner_id', user.id)
         .eq('owner_type', 'customer')
         .maybeSingle();
-      if (w) { setBalance(w.balance || 0); setCurrency(w.currency || 'EGP'); }
-      const { data: t } = await supabase
-        .from('wallet_transactions')
-        .select('id, type, amount, memo, related_order_id, created_at')
-        .order('created_at', { ascending: false })
-        .limit(100);
-      setTxs(t || []);
+      let walletId: string | null = null;
+      if (w) { 
+        setBalance(w.balance || 0); 
+        setCurrency(w.currency || 'EGP'); 
+        walletId = w.id as string;
+      }
+      if (walletId) {
+        const { data: t } = await supabase
+          .from('wallet_transactions')
+          .select('id, type, amount, memo, related_order_id, created_at')
+          .eq('wallet_id', walletId)
+          .order('created_at', { ascending: false })
+          .limit(100);
+        setTxs(t || []);
+      } else {
+        setTxs([]);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);

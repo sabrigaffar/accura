@@ -18,6 +18,8 @@ import {
   Power,
   Trash2,
   ChevronRight,
+  TrendingUp,
+  AlertCircle,
 } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -47,13 +49,37 @@ export default function MerchantSettings() {
   const handleClearCache = () => {
     Alert.alert(
       'مسح الكاش',
-      'هل تريد مسح جميع البيانات المؤقتة؟',
+      'هل تريد مسح جميع البيانات المؤقتة؟ هذا لن يؤثر على البيانات الأساسية.',
       [
         { text: 'إلغاء', style: 'cancel' },
         {
           text: 'مسح',
           style: 'destructive',
-          onPress: () => Alert.alert('تم', 'تم مسح الكاش بنجاح'),
+          onPress: async () => {
+            try {
+              // Clear specific cache items (keep important data like auth)
+              const keysToRemove = [
+                'merchant_notification_settings',
+                'app_currency_symbol',
+                // Add other cache keys as needed
+              ];
+              
+              await Promise.all(keysToRemove.map(key => AsyncStorage.removeItem(key)));
+              
+              Alert.alert('✅ تم', 'تم مسح الكاش بنجاح. سيتم تحديث التطبيق.');
+              
+              // Reset settings to defaults
+              setSettings({
+                darkMode: false,
+                autoAcceptOrders: false,
+                storeOpen: true,
+                offlineMode: false,
+              });
+              setCurrency('ريال');
+            } catch (error) {
+              Alert.alert('خطأ', 'فشل مسح الكاش. حاول مرة أخرى.');
+            }
+          },
         },
       ]
     );
@@ -104,6 +130,12 @@ export default function MerchantSettings() {
 
   const actionSettings = [
     {
+      icon: TrendingUp,
+      title: 'الإعلانات المموّلة',
+      description: 'إنشاء وإدارة إعلاناتك المدفوعة',
+      onPress: () => router.push('/merchant/sponsored-ads' as any),
+    },
+    {
       icon: Globe,
       title: 'العملة',
       description: currency,
@@ -136,14 +168,23 @@ export default function MerchantSettings() {
     {
       icon: Clock,
       title: 'ساعات العمل',
-      description: 'تحديد أوقات فتح المتجر',
-      onPress: () => Alert.alert('قريباً', 'خيارات ساعات العمل قيد التطوير'),
+      description: 'تحديد أوقات فتح وإغلاق المتجر',
+      onPress: () => router.push('/profile/merchant-working-hours' as any),
     },
     {
       icon: Trash2,
       title: 'مسح الكاش',
       description: 'حذف البيانات المؤقتة',
       onPress: handleClearCache,
+    },
+  ];
+
+  const supportSettings = [
+    {
+      icon: AlertCircle,
+      title: 'الشكاوى',
+      description: 'عرض وإدارة شكاويك',
+      onPress: () => router.push('/profile/complaints' as any),
     },
   ];
 
@@ -207,6 +248,32 @@ export default function MerchantSettings() {
                 style={[
                   styles.settingItem,
                   index === actionSettings.length - 1 && styles.lastItem,
+                ]}
+                onPress={item.onPress}
+              >
+                <View style={styles.settingIcon}>
+                  <item.icon size={20} color={colors.primary} />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>{item.title}</Text>
+                  <Text style={styles.settingDescription}>{item.description}</Text>
+                </View>
+                <ChevronRight size={20} color={colors.textLight} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Support Settings */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>الدعم</Text>
+          <View style={styles.card}>
+            {supportSettings.map((item, index) => (
+              <TouchableOpacity
+                key={index}
+                style={[
+                  styles.settingItem,
+                  index === supportSettings.length - 1 && styles.lastItem,
                 ]}
                 onPress={item.onPress}
               >

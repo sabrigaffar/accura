@@ -12,9 +12,13 @@ import MerchantSubscriptionsPage from './pages/MerchantSubscriptionsPage';
 import AdminWalletPage from './pages/AdminWalletPage';
 import PromotionsPage from './pages/PromotionsPage';
 import PromotionRulesPage from './pages/PromotionRulesPage';
+import SponsoredAdsPage from './pages/SponsoredAdsPage';
+import ComplaintsPage from './pages/ComplaintsPage';
+import JoinRequestsPage from './pages/JoinRequestsPage';
 
 import NotificationSystem from './components/NotificationSystem';
 import { useAuth } from './contexts/AuthContext';
+import { SettingsProvider } from './contexts/SettingsContext';
 
 function App() {
   const { user, loading } = useAuth();
@@ -29,24 +33,29 @@ function App() {
 
   return (
     <div className="App">
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={user ? <DashboardLayout /> : <Navigate to="/login" replace />}>
-          <Route index element={<DashboardPage />} />
-          <Route path="users" element={<UsersPage />} />
-          <Route path="orders" element={<OrdersPage />} />
-          <Route path="merchants" element={<MerchantsPage />} />
-          <Route path="drivers" element={<DriversPage />} />
-          <Route path="reports" element={<ReportsPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="wallet" element={<AdminWalletPage />} />
-          <Route path="subscriptions" element={<MerchantSubscriptionsPage />} />
-          <Route path="promotions" element={<PromotionsPage />} />
-          <Route path="promotion-rules" element={<PromotionRulesPage />} />
-        </Route>
-        <Route path="*" element={<Navigate to={user ? "/" : "/login"} replace />} />
-      </Routes>
-      <NotificationSystem />
+      <SettingsProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/" element={user ? <DashboardLayout /> : <Navigate to="/login" replace />}>
+            <Route index element={<DashboardPage />} />
+            <Route path="users" element={<UsersPage />} />
+            <Route path="orders" element={<OrdersPage />} />
+            <Route path="merchants" element={<MerchantsPage />} />
+            <Route path="drivers" element={<DriversPage />} />
+            <Route path="reports" element={<ReportsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="wallet" element={<AdminWalletPage />} />
+            <Route path="subscriptions" element={<MerchantSubscriptionsPage />} />
+            <Route path="promotions" element={<PromotionsPage />} />
+            <Route path="promotion-rules" element={<PromotionRulesPage />} />
+            <Route path="sponsored-ads" element={<SponsoredAdsPage />} />
+            <Route path="complaints" element={<ComplaintsPage />} />
+            <Route path="join-requests" element={<JoinRequestsPage />} />
+          </Route>
+          <Route path="*" element={<Navigate to={user ? "/" : "/login"} replace />} />
+        </Routes>
+        <NotificationSystem />
+      </SettingsProvider>
     </div>
   );
 }

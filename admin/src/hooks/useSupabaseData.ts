@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase, createAdminClient } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 
 // Types
 interface UserData {
@@ -201,7 +201,7 @@ export const useDrivers = (filters: { vehicleType?: string; status?: string; onl
         .from('driver_profiles')
         .select(`
           *,
-          profiles(full_name, phone_number)
+          profiles!inner(full_name, phone_number, is_active)
         `);
 
       // Apply filters
@@ -211,7 +211,6 @@ export const useDrivers = (filters: { vehicleType?: string; status?: string; onl
 
       if (filters.status && filters.status !== 'all') {
         const isActive = filters.status === 'active';
-        // We need to join with profiles table to filter by is_active
         query = query.eq('profiles.is_active', isActive);
       }
 
@@ -267,7 +266,10 @@ export const useDashboardStats = () => {
     totalOrders: 0,
     totalMerchants: 0,
     totalDrivers: 0,
-    totalRevenue: 0
+    totalRevenue: 0,
+    totalSponsoredAds: 0,
+    pendingOrders: 0,
+    pendingAds: 0,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -275,44 +277,47 @@ export const useDashboardStats = () => {
   const fetchStats = async () => {
     try {
       setLoading(true);
-      
-      // Fetch total users
-      const { count: usersCount } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true });
-
-      // Fetch total orders
-      const { count: ordersCount } = await supabase
-        .from('orders')
-        .select('*', { count: 'exact', head: true });
-
-      // Fetch total merchants
-      const { count: merchantsCount } = await supabase
-        .from('merchants')
-        .select('*', { count: 'exact', head: true });
-
-      // Fetch total drivers
-      const { count: driversCount } = await supabase
-        .from('driver_profiles')
-        .select('*', { count: 'exact', head: true });
-
-      // Fetch total revenue (sum of order totals)
-      const { data: revenueData, error: revenueError } = await supabase
-        .from('orders')
-        .select('total');
-
-      let totalRevenue = 0;
-      if (!revenueError && revenueData) {
-        totalRevenue = revenueData.reduce((sum, order) => sum + (order.total || 0), 0);
+      // Prefer RPC get_admin_overview for efficiency
+      const { data: overview, error: overviewError } = await supabase.rpc('get_admin_overview');
+      if (!overviewError && Array.isArray(overview) && overview[0]) {
+        const row: any = overview[0];
+        setStats({
+          totalUsers: Number(row.total_users) || 0,
+          totalOrders: Number(row.total_orders) || 0,
+          totalMerchants: Number(row.total_merchants) || 0,
+          totalDrivers: Number(row.total_drivers) || 0,
+          totalRevenue: Number(row.total_revenue) || 0,
+          totalSponsoredAds: Number(row.total_sponsored_ads) || 0,
+          pendingOrders: Number(row.pending_orders) || 0,
+          pendingAds: Number(row.pending_ads) || 0,
+        });
+      } else {
+        // Fallback to individual queries if RPC is unavailable
+        const { count: usersCount } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true });
+        const { count: ordersCount } = await supabase
+          .from('orders')
+          .select('*', { count: 'exact', head: true });
+        const { count: merchantsCount } = await supabase
+          .from('merchants')
+          .select('*', { count: 'exact', head: true });
+        const { count: driversCount } = await supabase
+          .from('driver_profiles')
+          .select('*', { count: 'exact', head: true });
+        const { data: revenueData } = await supabase
+          .from('orders')
+          .select('total');
+        const totalRevenue = (revenueData || []).reduce((sum: number, o: any) => sum + (o.total || 0), 0);
+        setStats((prev) => ({
+          ...prev,
+          totalUsers: usersCount || 0,
+          totalOrders: ordersCount || 0,
+          totalMerchants: merchantsCount || 0,
+          totalDrivers: driversCount || 0,
+          totalRevenue,
+        }));
       }
-
-      setStats({
-        totalUsers: usersCount || 0,
-        totalOrders: ordersCount || 0,
-        totalMerchants: merchantsCount || 0,
-        totalDrivers: driversCount || 0,
-        totalRevenue
-      });
     } catch (err: any) {
       setError(err.message || 'حدث خطأ أثناء جلب الإحصائيات');
       console.error('Error fetching dashboard stats:', err);

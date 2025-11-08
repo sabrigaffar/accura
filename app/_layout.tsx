@@ -21,6 +21,7 @@ import { ChatProvider } from '@/contexts/ChatContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
 import { PushNotificationProvider } from '@/contexts/PushNotificationContext';
 import { RoleNavigator } from '@/components/RoleNavigator';
+import { CartProvider } from '@/contexts/CartContext';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -57,10 +58,12 @@ export default function RootLayout() {
         <PushNotificationProvider>
           <NotificationProvider>
             <ChatProvider>
-              <RoleNavigator>
-                <StatusBar style="auto" />
-                <Stack screenOptions={{ headerShown: false }} />
-              </RoleNavigator>
+              <CartProvider>
+                <RoleNavigator>
+                  <StatusBar style="auto" />
+                  <Stack screenOptions={{ headerShown: false, gestureEnabled: false }} />
+                </RoleNavigator>
+              </CartProvider>
             </ChatProvider>
           </NotificationProvider>
         </PushNotificationProvider>

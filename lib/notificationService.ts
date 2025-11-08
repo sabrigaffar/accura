@@ -18,7 +18,7 @@ import type {
 // إعدادات الإشعارات الافتراضية
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    // shouldShowAlert is deprecated; use the following flags instead
     shouldPlaySound: true,
     shouldSetBadge: true,
     shouldShowBanner: true,
@@ -97,21 +97,41 @@ class NotificationService {
       const deviceType = Platform.OS as DeviceType;
       const deviceName = Device.deviceName || `${Platform.OS} Device`;
 
-      const { error } = await supabase
-        .from('push_tokens')
-        .upsert({
-          user_id: userId,
-          token: this.expoPushToken,
-          device_type: deviceType,
-          device_name: deviceName,
-          is_active: true,
-        }, {
-          onConflict: 'user_id,token'
-        });
+      // حاول استخدام RPC الأمن أولاً
+      const rpcRes = await supabase.rpc('upsert_push_token', {
+        p_token: this.expoPushToken,
+        p_device_type: deviceType,
+        p_device_name: deviceName,
+      });
 
-      if (error) {
-        console.error('خطأ في تسجيل Push Token:', error);
-        return false;
+      if (rpcRes.error) {
+        // إن لم تتوفر الدالة أو لا إذن، نحاول المسار القديم (upsert) مع سياسة RLS
+        const { error } = await supabase
+          .from('push_tokens')
+          .upsert({
+            user_id: userId,
+            token: this.expoPushToken,
+            device_type: deviceType,
+            device_name: deviceName,
+            is_active: true,
+          }, {
+            onConflict: 'token'
+          });
+
+        if (error) {
+          // تجاهل تكرار نفس الـ Token
+          const code = (error as any).code;
+          if (code === '23505') {
+            return true;
+          }
+          // سياسات RLS تمنع الإدراج
+          if (code === '42501') {
+            console.warn('RLS منعت إدراج push_tokens. تأكد من وجود سياسة INSERT مناسبة. سنتابع بدون حفظ الرمز.');
+            return true;
+          }
+          console.error('خطأ في تسجيل Push Token:', error);
+          return false;
+        }
       }
 
       return true;
@@ -153,23 +173,24 @@ class NotificationService {
     try {
       const { data, error } = await supabase
         .from('notifications')
-        .select(`
-          id,
-          user_id,
-          coalesce(title, title_ar, title_en) as title,
-          coalesce(body, body_ar, body_en) as body,
-          coalesce(type, notification_type) as type,
-          data,
-          is_read,
-          created_at,
-          read_at
-        `)
+        .select('id, user_id, title, title_ar, title_en, body, body_ar, body_en, type, notification_type, data, is_read, created_at, read_at')
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .limit(limit);
 
       if (error) throw error;
-      return (data as any) || [];
+      const rows = (data as any[]) || [];
+      return rows.map((n: any) => ({
+        id: n.id,
+        user_id: n.user_id,
+        title: n.title ?? n.title_ar ?? n.title_en ?? '',
+        body: n.body ?? n.body_ar ?? n.body_en ?? '',
+        type: n.type ?? n.notification_type ?? 'system',
+        data: n.data || {},
+        is_read: !!n.is_read,
+        created_at: n.created_at,
+        read_at: n.read_at ?? null,
+      }));
     } catch (error) {
       console.error('خطأ في جلب الإشعارات:', error);
       return [];

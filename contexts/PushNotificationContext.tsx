@@ -11,7 +11,7 @@ import { playNotificationSound } from '@/utils/soundPlayer';
 // تكوين سلوك الإشعارات
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    // shouldShowAlert is deprecated; use the following flags instead
     shouldPlaySound: true,
     shouldSetBadge: true,
     shouldShowBanner: true,
@@ -33,28 +33,22 @@ interface PushNotificationProviderProps {
 }
 
 export function PushNotificationProvider({ children }: PushNotificationProviderProps) {
-  const { user, userType } = useAuth();
+  const { user, userType, approvalPending, approvalChecked } = useAuth();
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   const [notification, setNotification] = useState<Notifications.Notification | null>(null);
   const notificationListener = useRef<any>(null);
   const responseListener = useRef<any>(null);
+  const attemptedRef = useRef(false);
 
+  // سجّل مستمعي الإشعارات مرة واحدة عند التركيب
   useEffect(() => {
-    // تسجيل تلقائي عند تسجيل الدخول
-    if (user) {
-      registerForPushNotifications();
-    }
-
-    // الاستماع للإشعارات الواردة
     notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
       console.log('📨 Notification received:', notification);
       setNotification(notification);
-      
       // تشغيل صوت التنبيه
       playNotificationSound();
     });
 
-    // الاستماع لنقرات المستخدم على الإشعارات
     responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
       console.log('👆 Notification tapped:', response);
       handleNotificationResponse(response);
@@ -68,7 +62,21 @@ export function PushNotificationProvider({ children }: PushNotificationProviderP
         responseListener.current.remove();
       }
     };
-  }, [user]);
+  }, []);
+
+  // أعِد المحاولة لمستخدم جديد
+  useEffect(() => {
+    attemptedRef.current = false;
+  }, [user?.id]);
+
+  // تسجيل Push Token مرة واحدة فقط وبعد التأكد من عدم وجود طلب معلّق
+  useEffect(() => {
+    const ready = !!(user && approvalChecked && !approvalPending);
+    if (!ready) return;
+    if (attemptedRef.current) return;
+    attemptedRef.current = true;
+    registerForPushNotifications();
+  }, [user?.id, userType, approvalPending, approvalChecked]);
 
   const handleNotificationResponse = (response: Notifications.NotificationResponse) => {
     const data = response.notification.request.content.data;

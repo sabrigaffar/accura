@@ -17,9 +17,11 @@ import {
 import DataExport from '../components/DataExport';
 import { useReportsData } from '../hooks/useSupabaseData';
 import { supabase } from '../lib/supabase';
+import { useSettings } from '../contexts/SettingsContext';
 
 const ReportsPage = () => {
   const [reportType, setReportType] = useState('orders');
+  const { currency } = useSettings();
   const [dateRange, setDateRange] = useState('monthly');
 
   // Platform revenue summary (RPC) and upcoming notifications
@@ -84,23 +86,23 @@ const ReportsPage = () => {
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <div className="bg-white p-4 rounded shadow">
           <div className="text-gray-500 text-sm">إجمالي الداخل</div>
-          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.total_in ?? 0).toFixed(2)} EGP</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.total_in ?? 0).toFixed(2)} {currency}</div>
         </div>
         <div className="bg-white p-4 rounded shadow">
           <div className="text-gray-500 text-sm">اشتراكات التجار</div>
-          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.subscriptions_in ?? 0).toFixed(2)} EGP</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.subscriptions_in ?? 0).toFixed(2)} {currency}</div>
         </div>
         <div className="bg-white p-4 rounded shadow">
           <div className="text-gray-500 text-sm">رسوم لكل كم</div>
-          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.per_km_in ?? 0).toFixed(2)} EGP</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.per_km_in ?? 0).toFixed(2)} {currency}</div>
         </div>
         <div className="bg-white p-4 rounded shadow">
           <div className="text-gray-500 text-sm">رسوم الخدمة</div>
-          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.service_fee_in ?? 0).toFixed(2)} EGP</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.service_fee_in ?? 0).toFixed(2)} {currency}</div>
         </div>
         <div className="bg-white p-4 rounded shadow">
           <div className="text-gray-500 text-sm">أخرى</div>
-          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.other_in ?? 0).toFixed(2)} EGP</div>
+          <div className="text-2xl font-bold">{loadingKpis ? '...' : (rev?.other_in ?? 0).toFixed(2)} {currency}</div>
         </div>
       </div>
 
@@ -200,11 +202,12 @@ const ReportsPage = () => {
                 >
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" />
-                  <YAxis />
+                  <YAxis yAxisId="left" />
+                  <YAxis yAxisId="right" orientation="right" />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="orders" fill="#00B074" name="الطلبات" />
-                  <Bar dataKey="revenue" fill="#FFD84D" name="الإيرادات (ر.س)" />
+                  <Bar yAxisId="left" dataKey="orders" fill="#00B074" name="الطلبات" />
+                  <Line yAxisId="right" type="monotone" dataKey="revenue" stroke="#FFD84D" name={`الإيرادات (${currency})`} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -283,7 +286,7 @@ const ReportsPage = () => {
                       الطلبات
                     </th>
                     <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      الإيرادات (ر.س)
+                      الإيرادات ({currency})
                     </th>
                   </>
                 )}
@@ -325,7 +328,7 @@ const ReportsPage = () => {
                     {data.orders}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {data.revenue.toFixed(2)}
+                    {data.revenue.toFixed(2)} {currency}
                   </td>
                 </tr>
               ))}

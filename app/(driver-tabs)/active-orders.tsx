@@ -52,8 +52,9 @@ enum DeliveryStep {
 }
 
 export default function DriverActiveOrders() {
-  const params = useLocalSearchParams<{ orderId?: string }>();
+  const params = useLocalSearchParams<{ orderId?: string; navTarget?: 'merchant' | 'customer' }>();
   const initialOrderId = typeof params.orderId === 'string' ? params.orderId : undefined;
+  const initialNavTarget = params.navTarget === 'merchant' || params.navTarget === 'customer' ? params.navTarget : undefined;
   const { user } = useAuth();
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const { theme } = useTheme();
@@ -75,12 +76,34 @@ export default function DriverActiveOrders() {
   const trackingStartedRef = useRef(false);
   const lastTrackedOrderIdRef = useRef<string | null>(null);
   const convoAttemptedForOrderRef = useRef<Record<string, boolean>>({});
+  const autoNavigatedRef = useRef<boolean>(false);
   const fetchingActiveRef = React.useRef(false);
+
+  // نافذة تأكيد قبل فتح الخرائط
+  const promptNavigate = (target: 'merchant' | 'customer') => {
+    const label = target === 'merchant' ? 'للمتجر' : 'للعميل';
+    Alert.alert(
+      'فتح تطبيق الخرائط',
+      `هل تريد فتح الخرائط الآن للتوجيه ${label}؟`,
+      [
+        { text: 'لاحقاً', style: 'cancel' },
+        { text: 'افتح الآن', onPress: () => handleNavigate(target) },
+      ]
+    );
+  };
 
   useEffect(() => {
     fetchActiveOrder();
     fetchCurrency();
   }, []);
+
+  // ✅ إذا تم تمرير navTarget من الشاشة السابقة، ابدأ الملاحة تلقائياً عند توفر البيانات
+  useEffect(() => {
+    if (!autoNavigatedRef.current && activeOrder && initialNavTarget) {
+      autoNavigatedRef.current = true;
+      promptNavigate(initialNavTarget);
+    }
+  }, [activeOrder, initialNavTarget]);
 
   // إعادة الجلب عند تركيز الشاشة
   useFocusEffect(
@@ -119,8 +142,13 @@ export default function DriverActiveOrders() {
         console.warn('create conversation error:', createErr);
         return null;
       }
-      if (rpcData && typeof rpcData === 'object' && 'id' in rpcData) {
-        const cid = (rpcData as any).id as string;
+      let cid: string | undefined;
+      if (Array.isArray(rpcData)) {
+        cid = rpcData[0]?.id as string | undefined;
+      } else if (rpcData && typeof rpcData === 'object' && 'id' in rpcData) {
+        cid = (rpcData as any).id as string;
+      }
+      if (cid) {
         setConversationId(cid);
         return cid;
       }
@@ -320,6 +348,17 @@ export default function DriverActiveOrders() {
           const customerLat = o.customer_latitude;
           const customerLng = o.customer_longitude;
 
+          // ✅ احسب عدد الأصناف عبر RPC حتى في مسار initialOrderId
+          let itemsCountById = 0;
+          try {
+            const { data: cdata } = await supabase.rpc('get_orders_items_count', { p_order_ids: [o.id] });
+            if (Array.isArray(cdata) && cdata[0] && cdata[0].order_id === o.id) {
+              itemsCountById = cdata[0].items_count || 0;
+            }
+          } catch (e) {
+            console.warn('get_orders_items_count RPC error (by id):', e);
+          }
+
           const active: ActiveOrder = {
             id: o.id,
             order_number: o.order_number,
@@ -333,7 +372,7 @@ export default function DriverActiveOrders() {
             total: o.total,
             delivery_fee: o.delivery_fee,
             status: o.status,
-            items_count: 0,
+            items_count: itemsCountById,
             picked_up_at: o.picked_up_at || undefined,
             heading_to_merchant_at: o.heading_to_merchant_at || undefined,
             heading_to_customer_at: o.heading_to_customer_at || undefined,
@@ -534,6 +573,8 @@ export default function DriverActiveOrders() {
       if (error) throw error;
       Alert.alert('✅ تم التحديث', 'أنت الآن في الطريق إلى المتجر', [{ text: 'حسناً' }]);
       fetchActiveOrder();
+      // اعرض تأكيد فتح الخرائط للمتجر
+      promptNavigate('merchant');
     } catch (error) {
       console.error('Error updating order:', error);
       Alert.alert('❌ خطأ', 'لم يتم تحديث الحالة. حاول مرة أخرى.', [{ text: 'حسناً' }]);
@@ -568,6 +609,8 @@ export default function DriverActiveOrders() {
 
               Alert.alert('تم الاستلام', 'الآن يمكنك التوجه للعميل');
               fetchActiveOrder();
+              // اعرض تأكيد فتح الخرائط للعميل بعد الاستلام
+              promptNavigate('customer');
             } catch (error) {
               console.error('Error updating order:', error);
               Alert.alert('❌ خطأ', 'لم يتم تأكيد الاستلام. حاول مرة أخرى.', [{ text: 'حسناً' }]);
@@ -780,16 +823,45 @@ export default function DriverActiveOrders() {
     Alert.alert('الاتصال بالتاجر', 'سيتم إضافة هذه الميزة قريباً');
   };
 
-  const handleNavigate = () => {
+  const handleNavigate = (target?: 'merchant' | 'customer') => {
     // نستخدم الإحداثيات الدقيقة لمسار ملاحة صحيح
     // الوجهة: إلى المتجر قبل الاستلام، وإلى العميل بعد الاستلام
     const step = getCurrentStep();
-    const destination = (step <= DeliveryStep.PICKED_UP ? merchantLocation : customerLocation);
+    // إذا تم تمرير هدف صريح (merchant/customer) استخدمه بدل الاستدلال من الخطوة
+    const destination = target
+      ? (target === 'merchant' ? merchantLocation : customerLocation)
+      : (step <= DeliveryStep.PICKED_UP ? merchantLocation : customerLocation);
     const origin = driverLocation; // يفضّل استخدام موقع السائق الحالي
 
     if (!destination?.latitude || !destination?.longitude) {
-      Alert.alert('تنبيه', 'إحداثيات الوجهة غير متوفرة بعد. افتح الخريطة الداخلية أولاً للتحديث أو انتظر ثوانٍ.');
-      return;
+      // ⚠️ لا توجد إحداثيات: جرّب العنوان كنص بحث في الخرائط بدل إظهار التنبيه مباشرة
+      const addressText = target
+        ? (target === 'merchant' ? activeOrder?.merchant_address : activeOrder?.delivery_address)
+        : (step <= DeliveryStep.PICKED_UP ? activeOrder?.merchant_address : activeOrder?.delivery_address);
+
+      if (addressText && typeof addressText === 'string' && addressText.trim().length > 0) {
+        const query = encodeURIComponent(addressText);
+        const appleUrlQ = `http://maps.apple.com/?q=${query}`;
+        const googleUrlQ = `https://www.google.com/maps/search/?api=1&query=${query}`;
+        (async () => {
+          try {
+            if (Platform.OS === 'ios') {
+              const canAppleQ = await Linking.canOpenURL(appleUrlQ);
+              if (canAppleQ) { await Linking.openURL(appleUrlQ); return; }
+            }
+            const canGoogleQ = await Linking.canOpenURL(googleUrlQ);
+            if (canGoogleQ) { await Linking.openURL(googleUrlQ); return; }
+            await Linking.openURL(`https://maps.google.com/?q=${query}`);
+          } catch (err) {
+            console.error('Error opening maps with address query:', err);
+            Alert.alert('تنبيه', 'إحداثيات الوجهة غير متوفرة بعد. افتح الخريطة الداخلية أولاً للتحديث أو انتظر ثوانٍ.');
+          }
+        })();
+        return;
+      } else {
+        Alert.alert('تنبيه', 'إحداثيات الوجهة غير متوفرة بعد. افتح الخريطة الداخلية أولاً للتحديث أو انتظر ثوانٍ.');
+        return;
+      }
     }
 
     const destParam = `${destination.latitude},${destination.longitude}`;
@@ -985,7 +1057,7 @@ export default function DriverActiveOrders() {
                   {conversationId && (
                     <TouchableOpacity
                       style={[styles.callButton, { backgroundColor: colors.primary }]}
-                      onPress={() => router.push({ pathname: `/chat/${conversationId}`, params: { driverPhone: activeOrder.customer_phone } } as any)}
+                      onPress={() => router.push({ pathname: `/chat/${conversationId}`, params: { customerPhone: activeOrder.customer_phone } } as any)}
                     >
                       <MessageCircle size={18} color={colors.white} />
                       <Text style={styles.callButtonText}>دردشة</Text>
@@ -1149,7 +1221,7 @@ export default function DriverActiveOrders() {
 
           {/* Action Buttons */}
           <View style={styles.actionButtons}>
-            <TouchableOpacity style={styles.navigateButton} onPress={handleNavigate}>
+            <TouchableOpacity style={styles.navigateButton} onPress={() => handleNavigate()}>
               <Navigation size={20} color={colors.white} />
               <Text style={styles.navigateButtonText}>التنقل</Text>
             </TouchableOpacity>

@@ -112,3 +112,67 @@ export async function deleteMultipleImages(imageUrls: string[]): Promise<number>
 
   return deletedCount;
 }
+
+// =============================
+// KYC uploads (private bucket)
+// =============================
+
+/**
+ * Upload an image to the private 'kyc-images' bucket and return the storage object path.
+ * Path format: `${folder}/${ownerId}/${timestamp_rand}.${ext}` where folder is 'drivers' or 'merchants'.
+ */
+export async function uploadToKyc(
+  imageUri: string,
+  ownerId: string,
+  folder: 'drivers' | 'merchants'
+): Promise<string | null> {
+  try {
+    const response = await fetch(imageUri);
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = new Uint8Array(arrayBuffer);
+
+    const uriLower = imageUri.toLowerCase();
+    let fileExt = 'jpg';
+    if (uriLower.includes('.png')) fileExt = 'png';
+    else if (uriLower.includes('.jpeg')) fileExt = 'jpeg';
+    else if (uriLower.includes('.jpg')) fileExt = 'jpg';
+
+    const fileName = `${folder}/${ownerId}/${Date.now()}_${Math.random().toString(36).slice(2)}.${fileExt}`;
+
+    const { error } = await supabase.storage
+      .from('kyc-images')
+      .upload(fileName, buffer, {
+        contentType: `image/${fileExt}`,
+        cacheControl: '3600',
+        upsert: false,
+      });
+    if (error) {
+      console.error('Error uploading KYC image:', error);
+      return null;
+    }
+    // Return storage path (private). Use createSignedUrl to view when needed.
+    return fileName;
+  } catch (e) {
+    console.error('Error processing KYC image:', e);
+    return null;
+  }
+}
+
+/**
+ * Create a signed URL for a private KYC object path.
+ */
+export async function getKycSignedUrl(path: string, expiresInSeconds = 3600): Promise<string | null> {
+  try {
+    const { data, error } = await supabase.storage
+      .from('kyc-images')
+      .createSignedUrl(path, expiresInSeconds);
+    if (error) {
+      console.error('Error creating signed URL:', error);
+      return null;
+    }
+    return data.signedUrl;
+  } catch (e) {
+    console.error('Error signing KYC URL:', e);
+    return null;
+  }
+}

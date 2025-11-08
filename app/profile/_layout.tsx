@@ -11,6 +11,7 @@ export default function ProfileLayout() {
         <Stack.Screen name="language" options={{ title: 'اللغة' }} />
         <Stack.Screen name="support" options={{ title: 'المساعدة والدعم' }} />
         <Stack.Screen name="settings" options={{ title: 'الإعدادات' }} />
+        <Stack.Screen name="complaints" options={{ title: 'الشكاوى' }} />
         <Stack.Screen name="driver-profile" options={{ title: 'ملف السائق' }} />
         <Stack.Screen name="merchant-profile" options={{ title: 'ملف المتجر' }} />
       </Stack>

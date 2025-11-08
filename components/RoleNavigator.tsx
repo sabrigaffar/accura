@@ -1,66 +1,114 @@
-import { useEffect, useRef } from 'react';
-import { useRouter, useSegments } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { BackHandler } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter, useSegments, useRootNavigationState } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoadingScreen } from './LoadingScreen';
 
+// تعريف الحالات
+type RoleState =
+  | 'loading'
+  | 'otpPending'
+  | 'unauthenticated'
+  | 'pendingApproval'
+  | 'authenticatedMerchant'
+  | 'authenticatedDriver'
+  | 'authenticatedCustomer';
+
 export function RoleNavigator({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const segments = useSegments();
-  const { session, userType, loading } = useAuth();
-  const lastUserType = useRef<string | null>(null);
+  const rootNav = useRootNavigationState();
+  const { session, userType, loading, approvalPending, approvalChecked } = useAuth();
+  const [otpPending, setOtpPending] = useState(false);
 
-  // ✅ إعادة تعيين العلم عند تغيير userType
+  // اقرأ حالة الـ OTP من AsyncStorage
   useEffect(() => {
-    if (userType !== lastUserType.current) {
-      lastUserType.current = userType;
-    }
-  }, [userType]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const flag = await AsyncStorage.getItem('otp_pending_signup');
+        if (!cancelled) setOtpPending(flag === 'true');
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [segments]);
 
-  // ✅ توجيه حسب نوع المستخدم عند تغيّر الجلسة أو نوع المستخدم
+  // دالة تحويل الحالة إلى Root
+  const redirectToRoot = (state: RoleState) => {
+    const currentRoot = (segments[0] as string) || '';
+
+    const stateToRootMap: Record<RoleState, string> = {
+      loading: '',
+      otpPending: 'auth/signup',
+      unauthenticated: 'auth/login',
+      pendingApproval: 'auth/waiting-approval',
+      authenticatedMerchant: '(merchant-tabs)',
+      authenticatedDriver: '(driver-tabs)',
+      authenticatedCustomer: '(customer-tabs)',
+    };
+
+    const targetRoot = stateToRootMap[state];
+    // Build a typed-safe path for expo-router (cast to any to satisfy typed routes)
+    const targetPath = (`/${targetRoot}`) as any;
+
+    if (!currentRoot.includes(targetRoot)) {
+      console.log('[RoleNavigator] redirecting', { from: currentRoot, to: targetRoot });
+      router.replace(targetPath);
+    }
+  };
+
+  // حساب الحالة الحالية
+  const getCurrentState = (): RoleState => {
+    if (loading || (session && !approvalChecked)) return 'loading';
+    if (otpPending) return 'otpPending';
+    if (!session) return 'unauthenticated';
+    if (approvalPending) return 'pendingApproval';
+    if (userType === 'merchant') return 'authenticatedMerchant';
+    if (userType === 'driver') return 'authenticatedDriver';
+    return 'authenticatedCustomer';
+  };
+
+  // توجيه عند تغير الحالة
   useEffect(() => {
-    if (loading) return;
-    const currentRoot = segments[0] || '';
+    if (!rootNav?.key) return; // انتظر تحميل الRouter
 
-    if (!session) {
-      if (currentRoot !== 'auth') {
-        router.replace('/auth');
-      }
-      return;
-    }
+    const state = getCurrentState();
+    redirectToRoot(state);
+  }, [loading, session, approvalPending, approvalChecked, userType, rootNav, segments]);
 
-    // انتظر حتى يتم جلب نوع المستخدم لتجنب التوجيه الافتراضي لواجهة العميل
-    if (!userType) return;
-
-    const targetRoot = userType === 'merchant'
-      ? '(merchant-tabs)'
-      : userType === 'driver'
-        ? '(driver-tabs)'
-        : '(customer-tabs)';
-
-    const safeRoots = new Set(['', '(customer-tabs)', '(driver-tabs)', '(merchant-tabs)', '(tabs)', 'auth']);
-    if (!safeRoots.has(currentRoot)) {
-      return;
-    }
-
-    // وجّه فقط إذا كنا على جذر خاطئ
-    if (currentRoot !== targetRoot) {
-      router.replace(`/${targetRoot}`);
-    }
-  }, [loading, session, userType]);
-
-  // ✅ الاستماع لتسجيل الخروج فقط
+  // منع الرجوع في أندرويد
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    const onBackPress = () => {
+      const currentRoot = (segments[0] as string) || '';
+      if (currentRoot === 'auth') return false; // السماح بالرجوع داخل auth
+      return true; // منع الرجوع في التبويبات
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [segments]);
+
+  // الاستماع لتسجيل الخروج
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
       if (event === 'SIGNED_OUT') {
-        router.replace('/auth');
+        try {
+          const otpPending = await AsyncStorage.getItem('otp_pending_signup');
+          if (otpPending === 'true') return;
+        } catch {}
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) return;
+        } catch {}
+        router.replace('/auth/login');
       }
     });
     return () => subscription.unsubscribe();
   }, []);
 
-  // ✅ عرض شاشة تحميل بعد كل الـ Hooks
-  if (loading) {
+  // شاشة تحميل
+  if (loading || (session && !approvalChecked)) {
     return <LoadingScreen message="جاري تحميل بياناتك..." />;
   }
 

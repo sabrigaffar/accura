@@ -249,7 +249,7 @@ export default function MerchantProducts() {
       description: r.description_ar || r.description_en || '',
       price: Number(r.price || 0),
       discount_price: undefined,
-      quantity: 0,
+      quantity: Number(r.stock ?? r.available_quantity ?? r.quantity ?? r.qty ?? 0),
       category: r.category || '',
       images: r.image_url ? [r.image_url] : [],
       is_active: r.is_available !== false,

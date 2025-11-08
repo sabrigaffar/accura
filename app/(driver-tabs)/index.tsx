@@ -82,7 +82,16 @@ export default function DriverAvailableOrders() {
   const [driverName, setDriverName] = useState<string>('');
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const fetchingAvailableRef = React.useRef(false);
+  const lastFetchAvailableAtRef = React.useRef(0);
   const [hasDriverPhoto, setHasDriverPhoto] = useState<boolean>(true);
+
+  // ✅ تحدّث إحصائيات اليوم عند رجوع المستخدم لهذه الشاشة
+  useFocusEffect(
+    useCallback(() => {
+      fetchDailyStats();
+      return () => {};
+    }, [user?.id])
+  );
 
   async function checkDriverPhoto(): Promise<boolean> {
     try {
@@ -250,11 +259,13 @@ export default function DriverAvailableOrders() {
   };
 
   const handleRefresh = async () => {
+    setRefreshing(true);
     try {
-      setRefreshing(true);
-      await fetchDriverLocation();
-      await fetchAvailableOrders();
-      await fetchDailyStats();
+      await Promise.allSettled([
+        fetchDriverLocation(),
+        fetchAvailableOrders(),
+        fetchDailyStats(),
+      ]);
     } catch (e) {
       console.error('refresh error', e);
     } finally {
@@ -321,16 +332,33 @@ export default function DriverAvailableOrders() {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
 
-      const { data: earningsData, error: earningsError } = await supabase
+      // نحاول أولاً باستخدام earned_at، وإن لم تكن موجودة نسقط إلى created_at
+      let earningsRows: any[] | null = null;
+      let earningsError: any = null;
+      const try1 = await supabase
         .from('driver_earnings')
-        .select('amount')
+        .select('amount, earned_at, created_at')
         .eq('driver_id', user.id)
         .gte('earned_at', todayStart.toISOString());
+      if (try1.error) {
+        earningsError = try1.error;
+        if ((try1.error as any).code === '42703') {
+          const try2 = await supabase
+            .from('driver_earnings')
+            .select('amount, created_at')
+            .eq('driver_id', user.id)
+            .gte('created_at', todayStart.toISOString());
+          if (try2.error) throw try2.error;
+          earningsRows = try2.data as any[];
+        } else {
+          throw try1.error;
+        }
+      } else {
+        earningsRows = try1.data as any[];
+      }
 
-      if (earningsError) throw earningsError;
-
-      const todayEarnings = earningsData?.reduce((sum, earning) => sum + earning.amount, 0) || 0;
-      const todayDeliveries = earningsData?.length || 0;
+      const todayEarnings = (earningsRows || []).reduce((sum, earning: any) => sum + Number(earning.amount || 0), 0);
+      const todayDeliveries = earningsRows?.length || 0;
 
       setDailyStats({
         todayEarnings,
@@ -366,16 +394,21 @@ export default function DriverAvailableOrders() {
 
   const fetchAvailableOrders = async () => {
     try {
+      const now = Date.now();
       if (fetchingAvailableRef.current) return;
+      if (now - lastFetchAvailableAtRef.current < 800) return; // throttle
+      lastFetchAvailableAtRef.current = now;
       fetchingAvailableRef.current = true;
       setLoading(true);
       
       console.log('🔍 [Driver] Fetching available orders...');
       
       // جلب الطلبات الجاهزة للتوصيل (status = ready and no driver assigned)
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('orders')
-        .select(`
+      let ordersData: any[] | null = null;
+      let ordersError: any = null;
+      const baseSelect = (
+        embed: string
+      ) => `
           id,
           order_number,
           total,
@@ -395,14 +428,33 @@ export default function DriverAvailableOrders() {
           ),
           order_items (
             quantity,
-            products (
-              name
-            )
+            ${embed}
           )
-        `)
+        `;
+
+      // المحاولة الأولى: باستخدام قيد FK باسم order_items_product_id_fkey
+      const embed1 = `merchant_products!order_items_product_id_fkey ( name_ar )`;
+      let resp1 = await supabase
+        .from('orders')
+        .select(baseSelect(embed1))
         .eq('status', 'ready')
         .is('driver_id', null)
         .order('created_at', { ascending: false });
+      ordersData = resp1.data as any[];
+      ordersError = resp1.error;
+
+      // إن وُجد خطأ بسبب تعدد العلاقات أو اسم القيد، جرب الاسم الآخر
+      if (ordersError) {
+        const embed2 = `merchant_products!order_items_product_fk ( name_ar, name )`;
+        let resp2 = await supabase
+          .from('orders')
+          .select(baseSelect(embed2))
+          .eq('status', 'ready')
+          .is('driver_id', null)
+          .order('created_at', { ascending: false });
+        ordersData = resp2.data as any[];
+        ordersError = resp2.error;
+      }
 
       if (ordersError) {
         console.error('❌ [Driver] Error fetching orders:', ordersError);
@@ -461,7 +513,7 @@ export default function DriverAvailableOrders() {
         // تحويل order_items إلى الشكل المطلوب
         // إن كانت سياسة RLS تمنع جلب تفاصيل المنتجات، نستخدم ملخص RPC
         const itemsFromJoin = orderItems.map((item: any) => ({
-          product_name: item.products?.name_ar || item.products?.name || 'منتج',
+          product_name: item.merchant_products?.name_ar || item.merchant_products?.name || 'منتج',
           quantity: item.quantity || 1,
         }));
         const items = (summaryMap[order.id] && summaryMap[order.id].length > 0)
@@ -646,13 +698,8 @@ export default function DriverAvailableOrders() {
               }
 
               await fetchAvailableOrders();
-              router.push({ pathname: '/(driver-tabs)/active-orders', params: { orderId: orderId } } as any);
-              
-              setTimeout(() => {
-                Alert.alert('✅ تم قبول الطلب', 'يمكنك الآن بدء التوصيل', [
-                  { text: 'حسناً' }
-                ]);
-              }, 500);
+              // ✅ تلقائياً: بعد القبول يتجه السائق للمتجر
+              router.push({ pathname: '/(driver-tabs)/active-orders', params: { orderId, navTarget: 'merchant' } } as any);
             } catch (error) {
               console.error('Error accepting order:', error);
               Alert.alert('❌ خطأ', 'حدث خطأ أثناء قبول الطلب. حاول مرة أخرى.', [{ text: 'حسناً' }]);
