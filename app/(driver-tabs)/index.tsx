@@ -305,9 +305,12 @@ export default function DriverAvailableOrders() {
         .from('driver_profiles')
         .select('average_rating, is_online, preferred_currency')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
-      if (driverError) throw driverError;
+      // إذا لم يكن لدى المستخدم ملف سائق، تجاهل الخطأ PGRST116 وتعامل مع قيم افتراضية
+      if (driverError && (driverError as any).code !== 'PGRST116') {
+        throw driverError;
+      }
       
       // تحديث حالة isOnline محلياً
       setIsOnline(driverData?.is_online || false);
@@ -317,7 +320,7 @@ export default function DriverAvailableOrders() {
         .from('profiles')
         .select('full_name')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
       
       if (profileData?.full_name) {
         setDriverName(profileData.full_name);
