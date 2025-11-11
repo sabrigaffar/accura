@@ -212,7 +212,8 @@ export default function LoginScreen() {
       }
 
       // وجّه إلى مجموعة تبويبات مبدئية، وRoleNavigator سيصحح الوجهة حسب نوع المستخدم
-      router.replace('/(customer-tabs)');
+      // اترك RoleNavigator يقرر التوجيه بناءً على session/userType/approval
+      // لا نقوم بأي توجيه هنا لتجنب ازدواج التنقل وإظهار LoadingScreen مرتين
       
     } catch (error: any) {
       console.error('Login error:', error);

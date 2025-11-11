@@ -27,6 +27,18 @@ export default function RateOrderScreen() {
     setRating(starRating);
   };
 
+  // تحقق مسبقاً لتجنب محاولة إدراج مكررة (تؤدي لخطأ 23505)
+  const hasReview = async (type: 'driver' | 'merchant') => {
+    const { data } = await supabase
+      .from('reviews')
+      .select('id')
+      .eq('order_id', orderId)
+      .eq('reviewer_id', user?.id ?? '')
+      .eq('reviewee_type', type)
+      .maybeSingle();
+    return !!data;
+  };
+
   const submitRating = async () => {
 
     if (rating === 0) {
@@ -43,16 +55,22 @@ export default function RateOrderScreen() {
 
     try {
       // استخدام RPC آمنة تمنع التكرار وتتحقق من "تم التسليم" وتعين المُقيَّم تلقائياً
-      // تقييم السائق
+      let anySubmitted = false;
+
+      // تقييم السائق (إن لم يكن مُقيماً مسبقاً)
       try {
-        const { error: drvErr } = await supabase.rpc('create_review', {
-          p_order_id: orderId,
-          p_reviewee_type: 'driver',
-          p_rating: rating,
-          p_comment: comment.trim() || null,
-        });
-        if (drvErr && !`${drvErr?.message || ''}`.includes('no driver assigned')) {
-          throw drvErr;
+        const alreadyDriver = await hasReview('driver');
+        if (!alreadyDriver) {
+          const { error: drvErr } = await supabase.rpc('create_review', {
+            p_order_id: orderId,
+            p_reviewee_type: 'driver',
+            p_rating: rating,
+            p_comment: comment.trim() || null,
+          });
+          if (drvErr && !`${drvErr?.message || ''}`.includes('no driver assigned')) {
+            throw drvErr;
+          }
+          if (!drvErr) anySubmitted = true;
         }
       } catch (e) {
         // إذا لم يوجد سائق للطلب نتجاهل هذا التقييم ونكمل بتقييم المتجر
@@ -62,27 +80,35 @@ export default function RateOrderScreen() {
         }
       }
 
-      // تقييم المتجر
-      const { error: merErr } = await supabase.rpc('create_review', {
-        p_order_id: orderId,
-        p_reviewee_type: 'merchant',
-        p_rating: rating,
-        p_comment: comment.trim() || null,
-      });
-      if (merErr) throw merErr;
+      // تقييم المتجر (إن لم يكن مُقيماً مسبقاً)
+      const alreadyMerchant = await hasReview('merchant');
+      if (!alreadyMerchant) {
+        const { error: merErr } = await supabase.rpc('create_review', {
+          p_order_id: orderId,
+          p_reviewee_type: 'merchant',
+          p_rating: rating,
+          p_comment: comment.trim() || null,
+        });
+        if (merErr) throw merErr;
+        anySubmitted = true;
+      }
 
-      Alert.alert(
-        'نجاح',
-        'تم إرسال تقييمك بنجاح',
-        [
-          {
-            text: 'موافق',
-            onPress: () => router.back(),
-          },
-        ]
-      );
+      if (!anySubmitted) {
+        Alert.alert('تنبيه', 'لقد قمت بتقييم هذا الطلب مسبقاً');
+      } else {
+        Alert.alert(
+          'نجاح',
+          'تم إرسال تقييمك بنجاح',
+          [
+            {
+              text: 'موافق',
+              onPress: () => router.back(),
+            },
+          ]
+        );
+      }
     } catch (error: any) {
-      console.error('Error submitting rating:', error);
+      console.warn('Error submitting rating:', error);
       const code = error?.code;
       const msg: string = (error?.message || '').toString();
       if (code === '23505' || msg.includes('duplicate')) {

@@ -40,20 +40,7 @@ export function RoleNavigator({ children }: { children: React.ReactNode }) {
     }
 
     if (!session) {
-      // لا تعيد التوجيه فوراً لتجنب وميض/قفزة خاطئة أثناء تحديث الحالة بعد إنشاء متجر
-      if (
-        !noSessionTimer.current &&
-        signedOutRef.current &&
-        segments.length > 0 &&
-        currentRoot !== 'auth'
-      ) {
-        noSessionTimer.current = setTimeout(() => {
-          if (!session && signedOutRef.current) {
-            router.replace('/auth');
-          }
-          noSessionTimer.current = null;
-        }, 1500);
-      }
+      // عند عدم وجود جلسة: اعتمد على حدث SIGNED_OUT (فوق) أو على توجيه auth/index.tsx
       return;
     } else if (noSessionTimer.current) {
       clearTimeout(noSessionTimer.current);
@@ -118,7 +105,7 @@ export function RoleNavigator({ children }: { children: React.ReactNode }) {
         } catch {}
         const currentRoot = (segments[0] as string) || '';
         if (currentRoot !== 'auth') {
-          router.replace('/auth');
+          router.replace('/auth/login');
         }
       } else if (event === 'SIGNED_IN') {
         signedOutRef.current = false;
