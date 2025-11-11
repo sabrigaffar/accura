@@ -97,6 +97,8 @@ export default function SponsoredBanner({ ads, onImpression, onClick }: Sponsore
             style={styles.bannerCard}
             onPress={() => handleAdPress(ad)}
             activeOpacity={0.9}
+            accessibilityRole="button"
+            accessibilityLabel={`إعلان مموّل من ${ad.merchantName}. ${ad.title || ''}`}
           >
             {/* Image + Overlay wrapper to enforce rounded corners and clipping */}
             <View style={styles.imageWrapper}>
@@ -115,16 +117,16 @@ export default function SponsoredBanner({ ads, onImpression, onClick }: Sponsore
 
               {/* Content */}
               <View style={styles.content}>
-                <Text style={styles.merchantName} numberOfLines={1} ellipsizeMode="tail" allowFontScaling={false}>{ad.merchantName}</Text>
+                <Text style={styles.merchantName} numberOfLines={1} ellipsizeMode="tail">{ad.merchantName}</Text>
                 
                 {ad.discount ? (
                   <View style={styles.discountBanner}>
                     <Gift size={18} color="#fff" />
-                    <Text style={styles.discountText} numberOfLines={1} ellipsizeMode="tail" allowFontScaling={false}>{ad.discount}</Text>
+                    <Text style={styles.discountText} numberOfLines={1} ellipsizeMode="tail">{ad.discount}</Text>
                   </View>
                 ) : null}
 
-                <Text style={styles.description} numberOfLines={MAX_DESC_LINES} ellipsizeMode="tail" allowFontScaling={false}>{ad.description}</Text>
+                <Text style={styles.description} numberOfLines={MAX_DESC_LINES} ellipsizeMode="tail">{ad.description}</Text>
 
                 {/* Meta Info */}
                 <View style={styles.metaRow}>
@@ -150,8 +152,12 @@ export default function SponsoredBanner({ ads, onImpression, onClick }: Sponsore
                 </View>
 
                 {/* CTA Button */}
-                <TouchableOpacity style={styles.ctaButton}>
-                  <Text style={styles.ctaText} allowFontScaling={false}>اطلب الآن →</Text>
+                <TouchableOpacity
+                  style={styles.ctaButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={`افتح صفحة ${ad.merchantName} لبدء الطلب`}
+                >
+                  <Text style={styles.ctaText}>اطلب الآن →</Text>
                 </TouchableOpacity>
               </View>
               </LinearGradient>

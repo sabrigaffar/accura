@@ -60,6 +60,8 @@ export default function FeaturedStores({ stores }: FeaturedStoresProps) {
             style={styles.storeCard}
             onPress={() => handleStorePress(store)}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={`افتح صفحة ${store.name}`}
           >
             {/* Gradient Border for Sponsored */}
             {store.isSponsored && (

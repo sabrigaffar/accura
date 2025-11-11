@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Package, ShoppingCart, TrendingUp, DollarSign, Plus, Eye } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { useActiveStore } from '@/contexts/ActiveStoreContext';
 import { StoreButton } from '@/components/StoreSelector';
@@ -32,9 +33,23 @@ export default function MerchantDashboard() {
   const [currency, setCurrency] = useState('ريال');
   const { activeStore, loading: storesLoading, stores, isAllStoresSelected } = useActiveStore();
   const [totalStoresCount, setTotalStoresCount] = useState(0);
+  const [distanceKm, setDistanceKm] = useState<number | null>(null);
 
   useEffect(() => {
     loadCurrency();
+  }, []);
+
+  // عرض إشعار نجاح بعد إنشاء متجر جديد (بدلاً من إظهار التنبيه فوق شاشة تسجيل الدخول)
+  useEffect(() => {
+    (async () => {
+      try {
+        const justCreated = await AsyncStorage.getItem('merchant_just_created');
+        if (justCreated === 'true') {
+          await AsyncStorage.setItem('merchant_just_created', 'false');
+          Alert.alert('تم إنشاء المتجر', 'تم إنشاء متجرك بنجاح وهو مفعّل الآن. يمكنك البدء بإدارته من لوحة التاجر.');
+        }
+      } catch {}
+    })();
   }, []);
 
   useEffect(() => {
@@ -42,6 +57,45 @@ export default function MerchantDashboard() {
       fetchDashboardData();
     }
   }, [activeStore, isAllStoresSelected]);
+
+  // احسب المسافة إلى المتجر النشط (أو أقرب متجر عند اختيار الجميع)
+  useEffect(() => {
+    (async () => {
+      try {
+        setDistanceKm(null);
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== Location.PermissionStatus.GRANTED) return;
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+
+        const toRad = (x: number) => (x * Math.PI) / 180;
+        const haversine = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+          const R = 6371;
+          const dLat = toRad(lat2 - lat1);
+          const dLon = toRad(lon2 - lon1);
+          const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLon / 2) ** 2;
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          return R * c;
+        };
+
+        let best: number | null = null;
+        if (!isAllStoresSelected && activeStore && activeStore.latitude != null && activeStore.longitude != null) {
+          best = haversine(lat, lng, Number(activeStore.latitude), Number(activeStore.longitude));
+        } else if (isAllStoresSelected && stores.length > 0) {
+          for (const s of stores) {
+            if (s.latitude != null && s.longitude != null) {
+              const d = haversine(lat, lng, Number(s.latitude), Number(s.longitude));
+              if (best == null || d < best) best = d;
+            }
+          }
+        }
+        if (best != null && isFinite(best)) setDistanceKm(best);
+      } catch {}
+    })();
+  }, [activeStore?.id, isAllStoresSelected, stores.map(s => s.id).join(',')]);
 
   useEffect(() => {
     if (!storesLoading && !activeStore && !isAllStoresSelected) {
@@ -59,6 +113,72 @@ export default function MerchantDashboard() {
       setCurrency(symbol || 'ريال');
     } catch {}
   };
+
+  // تحقق يومي بعد الساعة 2 صباحاً: تأكيد وجود إحداثيات للمتاجر وتحديث geog
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) return;
+        const lastKey = `merchant_coords_last_check_${user.id}`;
+        const todayKey = `merchant_coords_last_day_${user.id}`;
+        const last = await AsyncStorage.getItem(lastKey); // طابع زمني لآخر تحقق
+        const lastDay = await AsyncStorage.getItem(todayKey); // آخر تاريخ YYYY-MM-DD تحقق بعد 2 صباحاً
+        const now = new Date();
+
+        // احسب "اليوم الحالي بعد 2 صباحاً" كتاريخ أساس
+        const twoAM = new Date(now);
+        twoAM.setHours(2, 0, 0, 0);
+        const yyyy = String(twoAM.getFullYear());
+        const mm = String(twoAM.getMonth() + 1).padStart(2, '0');
+        const dd = String(twoAM.getDate()).padStart(2, '0');
+        const todayMarker = `${yyyy}-${mm}-${dd}`;
+
+        // الشرطان المطلوبان:
+        // 1) الوقت الحالي تجاوز 2 صباحاً
+        // 2) لم ننفّذ تحققاً اليوم (بعد 2 صباحاً) مسبقاً
+        const nowPast2AM = now.getTime() >= twoAM.getTime();
+        const alreadyToday = lastDay === todayMarker;
+        if (!nowPast2AM || alreadyToday) return;
+
+        // اجلب جميع متاجرك
+        const { data: myStores, error } = await supabase
+          .from('merchants')
+          .select('id, latitude, longitude')
+          .eq('owner_id', user.id);
+        if (error || !Array.isArray(myStores)) return;
+
+        // هل لدينا متاجر بلا إحداثيات؟
+        const needCoords = myStores.filter((s: any) => s.latitude == null || s.longitude == null);
+        let coords: { lat: number; lng: number } | null = null;
+        if (needCoords.length > 0) {
+          try {
+            const { status } = await Location.requestForegroundPermissionsAsync();
+            if (status === Location.PermissionStatus.GRANTED) {
+              const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+              coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            }
+          } catch {}
+        }
+
+        // حدّث فقط المتاجر الناقصة للإحداثيات
+        if (coords) {
+          for (const s of needCoords) {
+            await supabase
+              .from('merchants')
+              .update({ latitude: coords.lat, longitude: coords.lng, updated_at: new Date().toISOString() })
+              .eq('id', s.id);
+          }
+        }
+
+        // ملاحظة: تريجر DB سيحدّث geog تلقائياً عند أي تحديث latitude/longitude
+        await AsyncStorage.multiSet([
+          [lastKey, String(now.getTime())],
+          [todayKey, todayMarker],
+        ]);
+      } catch {}
+    })();
+  }, []);
 
   const fetchDashboardData = async () => {
     try {
@@ -268,9 +388,19 @@ export default function MerchantDashboard() {
           <StoreButton />
         </View>
         {isAllStoresSelected ? (
-          <Text style={styles.headerSubtitle}>جميع المتاجر ({totalStoresCount} متجر)</Text>
+          <>
+            <Text style={styles.headerSubtitle}>جميع المتاجر ({totalStoresCount} متجر)</Text>
+            {distanceKm != null && (
+              <Text style={styles.headerSubtitle}>الأقرب يبعد عنك: {distanceKm.toFixed(1)} كم</Text>
+            )}
+          </>
         ) : activeStore ? (
-          <Text style={styles.headerSubtitle}>{activeStore.name_ar}</Text>
+          <>
+            <Text style={styles.headerSubtitle}>{activeStore.name_ar}</Text>
+            {distanceKm != null && (
+              <Text style={styles.headerSubtitle}>يبعد عنك: {distanceKm.toFixed(1)} كم</Text>
+            )}
+          </>
         ) : null}
       </View>
 

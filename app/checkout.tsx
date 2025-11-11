@@ -11,13 +11,16 @@ import {
   Linking,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { supabase } from '@/lib/supabase';
 import { getLastAdId, clearLastAdId } from '@/lib/adAttribution';
+import { calculateDeliveryFeeAsync } from '@/lib/deliveryFeeCalculator';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { ArrowLeft, MapPin, CreditCard, Wallet, Plus, Minus } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCart } from '@/contexts/CartContext';
+import { useToast } from '@/contexts/ToastContext';
 
 interface CartItem {
   id: string;
@@ -41,6 +44,7 @@ interface Address {
 export default function CheckoutScreen() {
   const { user } = useAuth();
   const { clearCart } = useCart();
+  const { success: showToastSuccess, error: showToastError, info: showToastInfo } = useToast();
   const params = useLocalSearchParams<{ 
     items?: string; 
     merchantId?: string;
@@ -55,7 +59,7 @@ export default function CheckoutScreen() {
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'wallet'>('cash');
   const [deliveryNotes, setDeliveryNotes] = useState('');
   const [loading, setLoading] = useState(false);
-  const [calculatedDeliveryFee, setCalculatedDeliveryFee] = useState<number>(10);
+  const [calculatedDeliveryFee, setCalculatedDeliveryFee] = useState<number | null>(null);
   const [calculatingFee, setCalculatingFee] = useState(false);
   // Quote breakdown (server-calculated) to show accurate discount before confirmation
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -228,10 +232,10 @@ export default function CheckoutScreen() {
     }
   };
 
-  // Refresh server quote whenever inputs change
+  // Refresh server quote whenever inputs change (only after delivery fee is known)
   useEffect(() => {
     const run = async () => {
-      if (!merchantIdParam || cartItems.length === 0) {
+      if (!merchantIdParam || cartItems.length === 0 || calculatedDeliveryFee == null) {
         setQuote(null);
         return;
       }
@@ -245,7 +249,7 @@ export default function CheckoutScreen() {
           p_items: itemsJson,
           p_payment_method: paymentMethod,
           p_delivery_fee: calculatedDeliveryFee,
-          p_tax: 1.5,
+          p_tax: 0, // الضريبة تُحتسب داخل قاعدة البيانات من إعداد المتجر
           p_ad_id: adId,
         });
         if (error) throw error;
@@ -316,11 +320,8 @@ export default function CheckoutScreen() {
           lon
         );
         console.log('📏 Distance calculated:', distance.toFixed(2), 'km');
-        // تقريب المسافة لأعلى (أي كسر من الكيلو = كيلو كامل)
-        const roundedDistance = Math.ceil(distance);
-        console.log('🔼 Rounded distance:', roundedDistance, 'km');
-        // 10 جنيه لكل كيلومتر (حد أدنى 10 جنيه)
-        const fee = Math.max(roundedDistance * 10, 10);
+        // استخدم السعر الأساسي الديناميكي لكل كم من إعدادات المنصة
+        const fee = await calculateDeliveryFeeAsync(distance);
         console.log('💰 Calculated delivery fee:', fee, 'EGP');
         setCalculatedDeliveryFee(fee);
       }
@@ -361,16 +362,16 @@ export default function CheckoutScreen() {
         // تقريب المسافة لأعلى (أي كسر من الكيلو = كيلو كامل)
         const roundedDistance = Math.ceil(distance);
         
-        // حساب الرسوم: 10 جنيه/كم، حد أدنى 10 جنيه
-        const fee = Math.max(roundedDistance * 10, 10);
+        // حساب الرسوم: استخدم السعر الأساسي الديناميكي لكل كم من إعدادات المنصة
+        const fee = await calculateDeliveryFeeAsync(roundedDistance);
         setCalculatedDeliveryFee(fee);
       } else {
-        // إذا لم تتوفر المواقع، استخدم رسوم افتراضية
-        setCalculatedDeliveryFee(10);
+        // إذا لم تتوفر المواقع، لا تؤكد الطلب قبل حساب الرسوم
+        setCalculatedDeliveryFee(null);
       }
     } catch (error) {
       console.error('Error calculating delivery fee:', error);
-      setCalculatedDeliveryFee(10); // رسوم افتراضية عند الخطأ
+      setCalculatedDeliveryFee(null); // لا تعتمد على قيمة افتراضية
     } finally {
       setCalculatingFee(false);
     }
@@ -412,6 +413,11 @@ export default function CheckoutScreen() {
   };
 
   const handlePlaceOrder = async () => {
+    // لا تسمح بإنشاء طلب قبل حساب رسوم التوصيل بدقة
+    if (calculatingFee || calculatedDeliveryFee == null) {
+      Alert.alert('انتظار حساب الرسوم', 'يتم الآن حساب رسوم التوصيل من إعدادات المنصة. برجاء الانتظار لحظات قبل تأكيد الطلب.');
+      return;
+    }
     // ✅ التحقق من وجود موقع (تلقائي أو يدوي)
     if (!temporaryLocation && !currentLocation) {
       Alert.alert('خطأ', 'الرجاء السماح بالوصول للموقع أو تحديده يدوياً');
@@ -480,7 +486,7 @@ export default function CheckoutScreen() {
         service_fee: quote?.service_fee ?? 2.50,
         tax: quote?.tax ?? 1.50,
         discount: quote?.discount ?? 0.00,
-        total: quote ? quote.total : (getTotalPrice() + calculatedDeliveryFee + 4.00),
+        total: quote ? quote.total : (getTotalPrice() + (calculatedDeliveryFee ?? 0) + 4.00),
         payment_method: paymentMethod,
         payment_status: paymentMethod === 'cash' ? 'pending' : 'paid',
         delivery_notes: deliveryNotes,
@@ -592,20 +598,18 @@ export default function CheckoutScreen() {
       try { clearCart(); } catch {}
       console.log('🚀 Navigating to orders page...');
 
-      // التوجيه الفوري بدون Alert
+      // التوجيه الفوري
       router.replace('/(tabs)/orders');
-      
-      // عرض Toast notification بعد التوجيه
+
+      // عرض Toast + Haptics بعد التوجيه
       setTimeout(() => {
-        Alert.alert(
-          '✅ تم إنشاء الطلب بنجاح!', 
-          `رقم الطلب: ${orderNumber}\n\nحالة الطلب: قيد الانتظار`,
-          [{ text: 'حسناً' }]
-        );
-      }, 500);
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+        showToastSuccess(`تم إنشاء الطلب بنجاح • رقم الطلب: ${orderNumber}`);
+      }, 400);
     } catch (error) {
       console.error('Error placing order:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء إنشاء الطلب');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+      showToastError('حدث خطأ أثناء إنشاء الطلب');
     } finally {
       setLoading(false);
     }
@@ -767,8 +771,10 @@ export default function CheckoutScreen() {
             <Text style={styles.summaryLabel}>سعر التوصيل</Text>
             {calculatingFee ? (
               <Text style={styles.summaryValue}>جاري الحساب...</Text>
+            ) : calculatedDeliveryFee == null && !quote ? (
+              <Text style={styles.summaryValue}>—</Text>
             ) : (
-              <Text style={styles.summaryValue}>{(quote?.delivery_fee ?? calculatedDeliveryFee).toFixed(2)} جنيه</Text>
+              <Text style={styles.summaryValue}>{(quote?.delivery_fee ?? calculatedDeliveryFee ?? 0).toFixed(2)} جنيه</Text>
             )}
           </View>
           <View style={styles.summaryRow}>
@@ -787,9 +793,13 @@ export default function CheckoutScreen() {
           )}
           <View style={[styles.summaryRow, styles.totalRow]}>
             <Text style={styles.totalLabel}>المجموع الإجمالي</Text>
-            <Text style={styles.totalValue}>{(
-              quote ? quote.total : (getTotalPrice() + calculatedDeliveryFee + 4.00)
-            ).toFixed(2)} جنيه</Text>
+            {calculatingFee || calculatedDeliveryFee == null ? (
+              <Text style={styles.totalValue}>—</Text>
+            ) : (
+              <Text style={styles.totalValue}>{(
+                quote ? quote.total : (getTotalPrice() + (calculatedDeliveryFee ?? 0) + 4.00)
+              ).toFixed(2)} جنيه</Text>
+            )}
           </View>
         </View>
       </ScrollView>
@@ -797,12 +807,16 @@ export default function CheckoutScreen() {
       {/* Place Order Button */}
       <View style={styles.footer}>
         <TouchableOpacity 
-          style={[styles.placeOrderButton, loading && styles.disabledButton]}
+          style={[styles.placeOrderButton, (loading || calculatingFee || calculatedDeliveryFee == null) && styles.disabledButton]}
           onPress={handlePlaceOrder}
-          disabled={loading}
+          disabled={loading || calculatingFee || calculatedDeliveryFee == null}
         >
           {loading ? (
             <Text style={styles.placeOrderText}>جاري إنشاء الطلب...</Text>
+          ) : calculatingFee ? (
+            <Text style={styles.placeOrderText}>جاري حساب رسوم التوصيل...</Text>
+          ) : calculatedDeliveryFee == null ? (
+            <Text style={styles.placeOrderText}>انتظار حساب الرسوم...</Text>
           ) : (
             <Text style={styles.placeOrderText}>تأكيد الطلب</Text>
           )}

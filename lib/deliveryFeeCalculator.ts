@@ -2,6 +2,7 @@
  * دوال حساب المسافة ورسوم التوصيل
  * Distance and Delivery Fee Calculator
  */
+import { supabase } from './supabase';
 
 export interface Location {
   latitude: number;
@@ -51,7 +52,8 @@ export function calculateDistance(point1: Location, point2: Location): number {
  * @returns رسوم التوصيل
  */
 export function calculateDeliveryFee(distanceInKm: number): number {
-  const feePerKm = 10; // 10 جنيه لكل كيلو
+  // قراءة السعر الأساسي لكل كم من إعدادات المنصة (مع كاش داخلي)
+  const feePerKm = getBaseFeePerKmCached();
   
   // تقريب لأعلى كيلو كامل
   // مثلاً: 0.3 كم → 1 كم
@@ -141,4 +143,53 @@ export function calculateDeliveryInfo(
  */
 export function canDeliver(distanceKm: number, maxDeliveryDistance: number = 15): boolean {
   return distanceKm <= maxDeliveryDistance;
+}
+
+/**
+ * كاش داخلي لإعداد base_fee_per_km من جدول platform_settings
+ * - للمكالمات المتزامنة نستخدم الكاش الحالي ونحاول تحديثه في الخلفية.
+ * - نوفر دالة Async للحصول على نتيجة دقيقة فوراً بعد الجلب.
+ */
+let baseFeePerKmCache: number | null = null;
+let baseFeePerKmFetchedAt = 0;
+let baseFeeFetchPromise: Promise<number> | null = null;
+const BASE_FEE_TTL_MS = 5 * 60 * 1000; // 5 دقائق
+
+async function fetchBaseFeePerKm(): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('get_base_fee_per_km');
+    if (error) throw error;
+    const val = Number(data ?? 10);
+    baseFeePerKmCache = isFinite(val) ? val : 10;
+    baseFeePerKmFetchedAt = Date.now();
+    return baseFeePerKmCache;
+  } catch {
+    // في حال فشل القراءة (مثلاً مستخدم غير مسجل)، نرجع آخر قيمة أو 10 افتراضياً
+    return baseFeePerKmCache ?? 10;
+  }
+}
+
+function ensureBaseFeeFresh() {
+  const now = Date.now();
+  const stale = !baseFeePerKmCache || (now - baseFeePerKmFetchedAt > BASE_FEE_TTL_MS);
+  if (stale && !baseFeeFetchPromise) {
+    baseFeeFetchPromise = fetchBaseFeePerKm().finally(() => {
+      baseFeeFetchPromise = null;
+    });
+  }
+}
+
+export function getBaseFeePerKmCached(): number {
+  ensureBaseFeeFresh();
+  return baseFeePerKmCache ?? 10;
+}
+
+export async function calculateDeliveryFeeAsync(distanceInKm: number): Promise<number> {
+  const feePerKm = await fetchBaseFeePerKm();
+  const kilometers = Math.ceil(distanceInKm);
+  return kilometers * feePerKm;
+}
+
+export async function refreshBaseFeePerKm(): Promise<void> {
+  await fetchBaseFeePerKm();
 }

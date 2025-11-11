@@ -11,8 +11,8 @@ import { playNotificationSound } from '@/utils/soundPlayer';
 // تكوين سلوك الإشعارات
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    // shouldShowAlert is deprecated; use the following flags instead
-    shouldPlaySound: true,
+    // نشغّل الصوت المخصص يدوياً عبر playNotificationSound
+    shouldPlaySound: false,
     shouldSetBadge: true,
     shouldShowBanner: true,
     shouldShowList: true,
@@ -142,7 +142,7 @@ export function PushNotificationProvider({ children }: PushNotificationProviderP
           importance: Notifications.AndroidImportance.MAX,
           vibrationPattern: [0, 250, 250, 250],
           lightColor: '#00B074',
-          sound: 'default',
+          sound: 'notification',
         });
       }
     } catch (error) {

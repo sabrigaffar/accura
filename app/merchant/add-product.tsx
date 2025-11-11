@@ -41,10 +41,17 @@ export default function AddProductScreen() {
     }
   }, [activeStore, stores]);
 
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
+
   const pickImages = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsMultipleSelection: true,
         quality: 0.8,
         aspect: [1, 1],

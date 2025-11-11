@@ -7,6 +7,11 @@
     "icon": "./assets/images/icon.png",
     "scheme": "accura",
     "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/logo-accura.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
@@ -45,7 +50,15 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
-      "expo-notifications"
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/notification.mp3",
+            "./assets/sounds/notification.wav"
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

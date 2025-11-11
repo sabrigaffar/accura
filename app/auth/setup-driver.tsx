@@ -37,6 +37,13 @@ export default function SetupDriverScreen() {
   const [idImageUri, setIdImageUri] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState(false);
 
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
+
   const createDriverProfile = async () => {
     // التحقق من صحة البيانات
     if (!vehicleType) {
@@ -255,7 +262,7 @@ export default function SetupDriverScreen() {
             onPress={async () => {
               try {
                 const result = await ImagePicker.launchImageLibraryAsync({
-                  mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                  mediaTypes: getMediaTypesImages(),
                   allowsEditing: true,
                   aspect: [3, 2],
                   quality: 0.8,

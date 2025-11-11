@@ -9,6 +9,7 @@ import {
   Image,
 } from 'react-native';
 import { router } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { ArrowLeft, Plus, Minus, Trash2 } from 'lucide-react-native';
 import { useCart } from '@/contexts/CartContext';
@@ -16,10 +17,13 @@ import * as Location from 'expo-location';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { getLastAdId } from '@/lib/adAttribution';
+import { calculateDeliveryFeeAsync } from '@/lib/deliveryFeeCalculator';
+import { useToast } from '@/contexts/ToastContext';
 
 export default function CartScreen() {
   const { items, storeId, updateQuantity, removeItem, getTotalItems, getTotalPrice } = useCart();
   const { user } = useAuth();
+  const { success: showToastSuccess, error: showToastError, info: showToastInfo } = useToast();
 
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [deliveryFee, setDeliveryFee] = useState<number>(10);
@@ -38,7 +42,7 @@ export default function CartScreen() {
   const [quoteLoading, setQuoteLoading] = useState(false);
 
   const displayDelivery = useMemo(() => (quote ? quote.delivery_fee : deliveryFee), [quote, deliveryFee]);
-  const displayTax = useMemo(() => (quote ? quote.tax : 1.5), [quote]);
+  const displayTax = useMemo(() => (quote ? quote.tax : 0), [quote]);
   const displayService = useMemo(() => (quote ? quote.service_fee : 0), [quote]);
   const displaySubtotal = useMemo(() => (quote ? quote.subtotal : getTotalPrice()), [quote, getTotalPrice]);
   const displayDiscount = useMemo(() => (quote ? quote.discount : 0), [quote]);
@@ -59,12 +63,14 @@ export default function CartScreen() {
         p_requested_quantity: currentQty + 1,
       });
       if (!error && Array.isArray(data) && data[0] && data[0].available === false) {
-        Alert.alert('مخزون غير كافٍ', data[0].message || 'لا يمكن زيادة الكمية');
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+        showToastError(data[0].message || 'مخزون غير كافٍ');
         return;
       }
     } catch {
       // في حال عدم توفر الدالة أو اختلاف المخطط، سنسمح بالزيادة، وسيتم فحص المخزون في صفحة الدفع
     }
+    try { Haptics.selectionAsync(); } catch {}
     updateQuantity(productId, currentQty + 1);
   };
 
@@ -101,13 +107,13 @@ export default function CartScreen() {
           .single();
         if (merchant?.latitude && merchant?.longitude && currentLocation) {
           const distance = calculateDistance(merchant.latitude, merchant.longitude, currentLocation.latitude, currentLocation.longitude);
-          const roundedKm = Math.ceil(distance);
-          setDeliveryFee(Math.max(roundedKm * 10, 10));
+          const fee = await calculateDeliveryFeeAsync(distance);
+          setDeliveryFee(fee);
         } else {
-          setDeliveryFee(10);
+          setDeliveryFee(0);
         }
       } catch {
-        setDeliveryFee(10);
+        setDeliveryFee(0);
       }
     })();
   }, [storeId, currentLocation]);
@@ -126,7 +132,7 @@ export default function CartScreen() {
           p_items: itemsPayload,
           p_payment_method: 'cash',
           p_delivery_fee: deliveryFee,
-          p_tax: 1.5,
+          p_tax: 0, // الضريبة تُحتسب داخل قاعدة البيانات من إعداد المتجر
           p_ad_id: adId,
         });
         if (error) throw error;
@@ -157,7 +163,8 @@ export default function CartScreen() {
 
   const handleCheckout = () => {
     if (cartItems.length === 0) {
-      Alert.alert('السلة فارغة', 'الرجاء إضافة منتجات إلى السلة قبل إتمام الطلب');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); } catch {}
+      showToastInfo('السلة فارغة — أضف منتجات أولاً');
       return;
     }
     
@@ -185,7 +192,7 @@ export default function CartScreen() {
       <View style={styles.quantityContainer}>
         <TouchableOpacity 
           style={styles.quantityButton}
-          onPress={() => updateQuantity(item.id, Math.max(0, item.quantity - 1))}
+          onPress={() => { try { Haptics.selectionAsync(); } catch {}; updateQuantity(item.id, Math.max(0, item.quantity - 1)); }}
         >
           <Minus size={16} color={colors.text} />
         </TouchableOpacity>
@@ -200,7 +207,7 @@ export default function CartScreen() {
       <Text style={styles.itemTotal}>{(item.price * item.quantity).toFixed(2)} جنيه</Text>
       <TouchableOpacity 
         style={styles.removeButton}
-        onPress={() => removeItem(item.id)}
+        onPress={() => { try { Haptics.selectionAsync(); } catch {}; removeItem(item.id); }}
       >
         <Trash2 size={20} color={colors.error} />
       </TouchableOpacity>

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Animated, ActivityIndicator, Image } from 'react-native';
 import { colors, spacing, typography } from '@/constants/theme';
 
 interface LoadingScreenProps {
@@ -40,7 +40,11 @@ export function LoadingScreen({ message = 'جاري التحميل...' }: Loadin
         {/* Logo or App Icon */}
         <View style={styles.logoContainer}>
           <View style={styles.logo}>
-            <Text style={styles.logoText}>🚚</Text>
+            <Image
+              source={require('../assets/images/logo-accura.png')}
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
           </View>
         </View>
 
@@ -73,15 +77,16 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   logo: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     backgroundColor: colors.primary + '20',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  logoText: {
-    fontSize: 48,
+  logoImage: {
+    width: 80,
+    height: 80,
   },
   spinner: {
     marginVertical: spacing.lg,

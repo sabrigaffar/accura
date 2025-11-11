@@ -119,6 +119,13 @@ export default function CreateAdScreen() {
     }
   };
 
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
+
   const pickImage = async () => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -128,7 +135,7 @@ export default function CreateAdScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsEditing: true,
         aspect: adType === 'banner' ? [16, 9] : [1, 1],
         quality: 0.8,

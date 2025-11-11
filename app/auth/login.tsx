@@ -14,12 +14,13 @@ import {
   ActivityIndicator,
   Alert,
   Switch,
+  Image,
 } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
-import { Package, Mail, Lock, Phone } from 'lucide-react-native';
+import { Mail, Lock, Phone } from 'lucide-react-native';
 
 export default function LoginScreen() {
   const [identifier, setIdentifier] = useState(''); // Email أو Phone
@@ -193,46 +194,18 @@ export default function LoginScreen() {
 
       if (uid) {
         try {
-          const [{ data: dp }, { data: mp }, { data: ms }] = await Promise.all([
+          // ملاحظة: لا نستخدم حالة موافقة المتاجر (merchants) لمنع الدخول
+          // بوابة الدخول يجب أن تعتمد فقط على موافقة حساب المستخدم (driver/merchant profile)
+          const [{ data: dp }, { data: mp }] = await Promise.all([
             supabase.from('driver_profiles').select('approval_status').eq('id', uid).maybeSingle(),
             supabase.from('merchant_profiles').select('approval_status').eq('owner_id', uid).maybeSingle(),
-            supabase.from('merchants').select('approval_status').eq('owner_id', uid),
           ]);
-          const msList = (ms || []) as Array<{ approval_status: string }>;
-          const pend = (dp?.approval_status === 'pending') || (mp?.approval_status === 'pending') || msList.some(m => m.approval_status === 'pending');
-          const rej = (dp?.approval_status === 'rejected') || (mp?.approval_status === 'rejected') || msList.some(m => m.approval_status === 'rejected');
+          const pend = (dp?.approval_status === 'pending') || (mp?.approval_status === 'pending');
+          const rej = (dp?.approval_status === 'rejected') || (mp?.approval_status === 'rejected');
           if (pend || rej) {
             router.replace('/auth/waiting-approval' as any);
             return;
           }
-
-          // تحديد الواجهة المناسبة مباشرة بعد تسجيل الدخول
-          let effective: 'customer' | 'merchant' | 'driver' = 'customer';
-          try {
-            const { data: prof } = await supabase
-              .from('profiles')
-              .select('user_type')
-              .eq('id', uid)
-              .maybeSingle();
-            if (prof?.user_type) effective = prof.user_type as any;
-          } catch {}
-
-          const msApproved = msList.some(m => m.approval_status === 'approved');
-          if (mp?.approval_status === 'approved' || msApproved) {
-            effective = 'merchant';
-          } else if (dp?.approval_status === 'approved') {
-            effective = 'driver';
-          }
-
-          const targetRoot = effective === 'merchant'
-            ? '/(merchant-tabs)'
-            : effective === 'driver'
-              ? '/(driver-tabs)'
-              : '/(customer-tabs)';
-
-          console.log('[Login] redirect', { effective, targetRoot });
-          router.replace(targetRoot as any);
-          return;
         } catch {
           // في حال فشل الفحص، تابع بالتوجيه الافتراضي وسيقوم RoleNavigator بالحماية لاحقاً
         }
@@ -269,7 +242,11 @@ export default function LoginScreen() {
         {/* Logo */}
         <View style={styles.logoContainer}>
           <View style={styles.logoCircle}>
-            <Package size={48} color={colors.white} />
+            <Image
+              source={require('../../assets/images/logo-accura.png')}
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
           </View>
           <Text style={styles.logoText}>Accura</Text>
           <Text style={styles.tagline}>توصيل سريع وآمن</Text>
@@ -427,21 +404,26 @@ const styles = StyleSheet.create({
   },
   logoContainer: {
     alignItems: 'center',
-    marginBottom: spacing.xxl,
+    marginBottom: 0,
   },
   logoCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 118,
+    height: 118,
+    borderRadius: 58,
     backgroundColor: colors.white + '20',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: spacing.md,
   },
+  logoImage: {
+    width: 80,
+    height: 80,
+  },
   logoText: {
     ...typography.h1,
     color: colors.white,
     marginBottom: spacing.xs,
+    fontFamily: 'Lemonada_500Medium',
   },
   tagline: {
     ...typography.body,

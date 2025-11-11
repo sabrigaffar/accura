@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -11,10 +11,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CreditCard, Plus } from 'lucide-react-native';
-import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
+import { spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTheme } from '@/contexts/ThemeContext';
+import { useToast } from '@/contexts/ToastContext';
+import * as Haptics from 'expo-haptics';
 
 export default function PaymentMethodsScreen() {
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { error: showToastError, info: showToastInfo, success: showToastSuccess } = useToast();
   const [paymentMethods, setPaymentMethods] = useState<Array<{ id: string; number: string; expiry: string; isDefault: boolean }>>([]);
   const [showModal, setShowModal] = useState(false);
   const [cardNumber, setCardNumber] = useState('');
@@ -47,7 +53,8 @@ export default function PaymentMethodsScreen() {
   const addCard = async () => {
     const cleanNumber = cardNumber.replace(/\D/g, '');
     if (cleanNumber.length < 12 || !/^(0[1-9]|1[0-2])\/\d{2}$/.test(expiry)) {
-      Alert.alert('خطأ', 'الرجاء إدخال رقم بطاقة صحيح وتاريخ انتهاء بالشكل MM/YY');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+      showToastError('الرجاء إدخال رقم بطاقة صحيح وتاريخ انتهاء بالشكل MM/YY');
       return;
     }
     const newCard = {
@@ -60,6 +67,8 @@ export default function PaymentMethodsScreen() {
     setShowModal(false);
     setCardNumber('');
     setExpiry('');
+    try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+    showToastSuccess('تمت إضافة البطاقة');
   };
 
   const removeCard = async (id: string) => {
@@ -85,7 +94,7 @@ export default function PaymentMethodsScreen() {
           <Text style={styles.sectionTitle}>البطاقات المحفوظة</Text>
           {paymentMethods.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <CreditCard size={64} color={colors.textLight} />
+              <CreditCard size={64} color={theme.textLight} />
               <Text style={styles.emptyTitle}>لا توجد بطاقات محفوظة</Text>
               <Text style={styles.emptyText}>قم بإضافة بطاقة دفع لبدء الطلب</Text>
             </View>
@@ -93,7 +102,7 @@ export default function PaymentMethodsScreen() {
             paymentMethods.map((method) => (
               <View key={method.id} style={styles.paymentCard}>
                 <View style={styles.cardHeader}>
-                  <CreditCard size={24} color={colors.primary} />
+                  <CreditCard size={24} color={theme.primary} />
                   <Text style={styles.cardNumber}>{method.number}</Text>
                   {method.isDefault && (
                     <View style={styles.defaultBadge}>
@@ -124,7 +133,7 @@ export default function PaymentMethodsScreen() {
         style={styles.addButton}
         onPress={() => setShowModal(true)}
       >
-        <Plus size={24} color={colors.white} />
+        <Plus size={24} color={theme.white} />
       </TouchableOpacity>
 
       <Modal visible={showModal} animationType="slide" onRequestClose={() => setShowModal(false)}>
@@ -165,21 +174,21 @@ export default function PaymentMethodsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   headerTitle: {
     ...typography.h2,
-    color: colors.text,
+    color: theme.text,
     textAlign: 'center',
   },
   content: {
@@ -190,7 +199,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.md,
   },
   emptyContainer: {
@@ -199,17 +208,17 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     marginTop: spacing.md,
     marginBottom: spacing.xs,
   },
   emptyText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     textAlign: 'center',
   },
   paymentCard: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     borderRadius: borderRadius.lg,
     padding: spacing.md,
     marginBottom: spacing.md,
@@ -218,96 +227,94 @@ const styles = StyleSheet.create({
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.md,
   },
   cardNumber: {
-    ...typography.body,
-    color: colors.text,
-    marginHorizontal: spacing.sm,
-    flex: 1,
+    ...typography.bodyMedium,
+    color: theme.text,
+    marginLeft: spacing.sm,
   },
   defaultBadge: {
-    backgroundColor: colors.primary + '20',
+    backgroundColor: theme.primary + '20',
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    paddingVertical: 2,
     borderRadius: borderRadius.sm,
+    marginLeft: spacing.sm,
   },
   defaultText: {
     ...typography.caption,
-    color: colors.primary,
+    color: theme.primary,
   },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: spacing.sm,
   },
   cardExpiry: {
     ...typography.caption,
-    color: colors.textLight,
-  },
-  removeText: {
-    ...typography.caption,
-    color: colors.error,
+    color: theme.textLight,
   },
   makeDefaultText: {
-    ...typography.caption,
-    color: colors.primary,
+    ...typography.body,
+    color: theme.primary,
+  },
+  removeText: {
+    ...typography.body,
+    color: theme.error,
   },
   addButton: {
-    position: 'absolute',
-    bottom: spacing.xl,
-    left: spacing.xl,
+    backgroundColor: theme.primary,
+    borderRadius: borderRadius.full,
     width: 56,
     height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    ...shadows.medium,
+    position: 'absolute',
+    bottom: spacing.xl,
+    right: spacing.xl,
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    padding: spacing.md,
+    borderBottomColor: theme.border,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
   },
   cancelText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   modalTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
   },
   saveText: {
-    ...typography.body,
-    color: colors.primary,
+    ...typography.bodyMedium,
+    color: theme.primary,
   },
   modalContent: {
     padding: spacing.md,
   },
   inputGroup: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   inputLabel: {
-    ...typography.bodyMedium,
-    color: colors.text,
-    marginBottom: spacing.sm,
+    ...typography.caption,
+    color: theme.textLight,
+    marginBottom: spacing.xs,
   },
   input: {
     ...typography.body,
+    borderColor: theme.border,
     borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: borderRadius.md,
     padding: spacing.md,
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
   },
 });

@@ -2,10 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, Upload, X, Clock, Calendar } from 'lucide-react-native';
+import { ArrowLeft, Upload, X, Clock, Calendar, ChevronUp, ChevronDown } from 'lucide-react-native';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
+import { uploadToBucket } from '@/lib/imageUpload';
 import * as ImagePicker from 'expo-image-picker';
+// @ts-ignore ensure to install: expo install react-native-webview
+import { WebView } from 'react-native-webview';
 
 const CATEGORIES = [
   { value: 'restaurant', label: 'مطعم', icon: '🍽️' },
@@ -47,6 +50,54 @@ export default function EditStoreScreen() {
   });
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
+  const [menuImageUris, setMenuImageUris] = useState<string[]>([]);
+  const [menuPdfUrl, setMenuPdfUrl] = useState<string>('');
+  const [menuLinkInput, setMenuLinkInput] = useState<string>('');
+  const [uploadingMenu, setUploadingMenu] = useState(false);
+  const [taxRatePercent, setTaxRatePercent] = useState<string>('0');
+
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
+
+  const handleRemovePdf = async () => {
+    try {
+      const url = (menuPdfUrl || '').trim();
+      if (!url) return;
+      // حاول حذف الملف من التخزين إن كان داخل bucket الخاص بنا
+      try {
+        const marker = '/storage/v1/object/public/merchant-menus/';
+        const idx = url.indexOf(marker);
+        if (idx !== -1) {
+          const path = url.substring(idx + marker.length);
+          if (path) {
+            await supabase.storage.from('merchant-menus').remove([path]);
+          }
+        }
+      } catch (_) {
+        // تجاهل أي خطأ بالحذف، يكفي مسح الحقل من الواجهة ثم من قاعدة البيانات عند الحفظ
+      }
+      setMenuPdfUrl('');
+      Alert.alert('تم', 'سيتم حفظ إزالة ملف المنيو (PDF) عند الضغط على حفظ');
+    } catch (e) {
+      Alert.alert('خطأ', 'تعذر إزالة ملف الـ PDF');
+    }
+  };
+
+  const moveMenuImage = (from: number, to: number) => {
+    setMenuImageUris(prev => {
+      if (to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
+  };
+  const moveImageUp = (idx: number) => moveMenuImage(idx, idx - 1);
+  const moveImageDown = (idx: number) => moveMenuImage(idx, idx + 1);
 
   useEffect(() => {
     fetchStore();
@@ -69,9 +120,22 @@ export default function EditStoreScreen() {
         setAddress(data.address || '');
         setLogoUrl(data.logo_url || '');
         setBannerUrl(data.banner_url || '');
+        setMenuPdfUrl(data.menu_url || '');
+        setTaxRatePercent(String((data as any).tax_rate_percent ?? 0));
         if (data.working_hours) {
           setWorkingHours(data.working_hours);
         }
+        // Fetch existing menu images
+        try {
+          const { data: imgs, error: imgsErr } = await supabase
+            .from('merchant_menu_images')
+            .select('image_url, sort_order')
+            .eq('merchant_id', id)
+            .order('sort_order', { ascending: true });
+          if (!imgsErr) {
+            setMenuImageUris((imgs || []).map((r: any) => r.image_url));
+          }
+        } catch {}
       }
     } catch (error: any) {
       console.error('Error fetching store:', error);
@@ -82,10 +146,64 @@ export default function EditStoreScreen() {
     }
   };
 
+  const pickMenuPdf = async () => {
+    try {
+      // @ts-ignore dynamic import until installed: expo install expo-document-picker
+      const DocumentPicker = await import('expo-document-picker');
+      const res = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', multiple: false });
+      if (!res.canceled && res.assets && res.assets[0]?.uri) {
+        setMenuPdfUrl(res.assets[0].uri);
+      }
+    } catch (e) {
+      console.error('pickMenuPdf error:', e);
+      Alert.alert('تنبيه', 'يرجى تثبيت expo-document-picker لاختيار ملفات PDF');
+    }
+  };
+
+  const removeMenuImage = (idx: number) => {
+    setMenuImageUris(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleAddMenuLink = () => {
+    const url = (menuLinkInput || '').trim();
+    if (!url) return;
+    if (/^https?:\/\//i.test(url)) {
+      if (/\.pdf($|\?)/i.test(url)) {
+        setMenuPdfUrl(url);
+      } else if (/\.(png|jpe?g|webp|gif)$/i.test(url)) {
+        setMenuImageUris(prev => [...prev, url]);
+      } else {
+        Alert.alert('تنبيه', 'الرابط ليس صورة أو PDF معروف');
+        return;
+      }
+      setMenuLinkInput('');
+    } else {
+      Alert.alert('تنبيه', 'الرجاء إدخال رابط يبدأ بـ http أو https');
+    }
+  };
+
+  const pickMenu = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: getMediaTypesImages(),
+        allowsMultipleSelection: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length) {
+        const uris = result.assets.map(a => a.uri).filter(Boolean) as string[];
+        setMenuImageUris(prev => [...prev, ...uris]);
+      }
+    } catch (error) {
+      console.error('Error picking menu:', error);
+      Alert.alert('خطأ', 'حدث خطأ أثناء اختيار المنيو');
+    }
+  };
+
   const pickLogo = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsMultipleSelection: false,
         quality: 0.8,
         aspect: [1, 1],
@@ -103,7 +221,7 @@ export default function EditStoreScreen() {
   const pickBanner = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsMultipleSelection: false,
         quality: 0.8,
         aspect: [16, 9],
@@ -156,6 +274,31 @@ export default function EditStoreScreen() {
     setLoading(true);
 
     try {
+      // رفع PDF إن كان محلياً
+      let finalPdfUrl = menuPdfUrl;
+      if (finalPdfUrl && !/^https?:\/\//i.test(finalPdfUrl)) {
+        try {
+          setUploadingMenu(true);
+          const prefix = id ? `merchants/${id}` : 'merchants/unknown';
+          const uploaded = await uploadToBucket(finalPdfUrl, 'merchant-menus', prefix, { forceExt: 'pdf', contentTypeOverride: 'application/pdf' });
+          if (uploaded) finalPdfUrl = uploaded;
+        } finally {
+          setUploadingMenu(false);
+        }
+      }
+
+      // رفع صور المنيو (محلية) والحصول على روابط عامة
+      const prefixImages = id ? `merchants/${id}` : 'merchants/unknown';
+      const resolvedImageUrls: string[] = [];
+      for (const uri of menuImageUris) {
+        if (/^https?:\/\//i.test(uri)) {
+          resolvedImageUrls.push(uri);
+        } else {
+          const up = await uploadToBucket(uri, 'merchant-menus', prefixImages);
+          if (up) resolvedImageUrls.push(up);
+        }
+      }
+
       const { error } = await supabase
         .from('merchants')
         .update({
@@ -165,12 +308,22 @@ export default function EditStoreScreen() {
           address,
           logo_url: logoUrl,
           banner_url: bannerUrl,
+          menu_url: finalPdfUrl ? finalPdfUrl : null,
+          tax_rate_percent: Math.max(0, Math.min(100, Number(taxRatePercent) || 0)),
           working_hours: workingHours,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);
 
       if (error) throw error;
+
+      // استبدال صور المنيو كلها وفق الترتيب الحالي
+      await supabase.from('merchant_menu_images').delete().eq('merchant_id', id);
+      if (resolvedImageUrls.length > 0) {
+        const rows = resolvedImageUrls.map((url, i) => ({ merchant_id: id, image_url: url, sort_order: i }));
+        const { error: insErr } = await supabase.from('merchant_menu_images').insert(rows);
+        if (insErr) throw insErr;
+      }
 
       setLoading(false);
       Alert.alert(
@@ -236,6 +389,69 @@ export default function EditStoreScreen() {
           </View>
         </View>
 
+        {/* Menu (optional) */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>المنيو (اختياري)</Text>
+          <View style={styles.logoContainer}>
+            <TouchableOpacity style={styles.addLogoButton} onPress={pickMenu}>
+              <Upload size={32} color={colors.textLight} />
+              <Text style={styles.addImageText}>اختيار صور متعددة</Text>
+            </TouchableOpacity>
+          </View>
+          {menuImageUris.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm }}>
+              {menuImageUris.map((uri, idx) => (
+                <View key={uri + idx} style={{ width: 100, height: 120, alignItems: 'center' }}>
+                  <View style={{ width: 100, height: 90, borderRadius: borderRadius.sm, overflow: 'hidden' }}>
+                    <Image source={{ uri }} style={{ width: '100%', height: '100%' }} />
+                    <TouchableOpacity onPress={() => removeMenuImage(idx)} style={{ position: 'absolute', top: 4, right: 4, backgroundColor: colors.black + '60', borderRadius: 10, padding: 2 }}>
+                      <X size={14} color={colors.white} />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                    <TouchableOpacity onPress={() => moveImageUp(idx)} disabled={idx === 0} style={{ opacity: idx === 0 ? 0.4 : 1 }}>
+                      <ChevronUp size={18} color={colors.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => moveImageDown(idx)} disabled={idx === menuImageUris.length - 1} style={{ opacity: idx === menuImageUris.length - 1 ? 0.4 : 1 }}>
+                      <ChevronDown size={18} color={colors.text} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+          <TouchableOpacity style={[styles.addSmallButton, { marginTop: spacing.sm }]} onPress={pickMenuPdf}>
+            <Upload size={24} color={colors.textLight} />
+            <Text style={styles.smallButtonText}>اختيار PDF للمنيو</Text>
+          </TouchableOpacity>
+          <Text style={styles.label}>أو أدخل رابط المنيو (صورة أو PDF)</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              placeholder="https://.../menu.jpg أو https://.../menu.pdf"
+              value={menuLinkInput}
+              onChangeText={setMenuLinkInput}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity onPress={handleAddMenuLink} style={styles.addSmallButton}>
+              <Text style={styles.smallButtonText}>إضافة</Text>
+            </TouchableOpacity>
+          </View>
+          {menuPdfUrl && /^https?:\/\//i.test(menuPdfUrl) && /\.pdf($|\?)/i.test(menuPdfUrl) && (
+            <View style={{ height: 180, borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md, overflow: 'hidden', marginTop: spacing.sm }}>
+              <WebView
+                source={{ uri: `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(menuPdfUrl)}` }}
+                style={{ flex: 1, backgroundColor: colors.lightGray }}
+              />
+            </View>
+          )}
+          {menuPdfUrl ? (
+            <TouchableOpacity onPress={handleRemovePdf} style={styles.removePdfButton}>
+              <Text style={styles.removePdfButtonText}>حذف ملف PDF</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
         {/* Logo Image */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>شعار المتجر (Logo)</Text>
@@ -282,6 +498,21 @@ export default function EditStoreScreen() {
             multiline
             numberOfLines={4}
           />
+        </View>
+
+        {/* Tax rate percent */}
+        <View style={styles.section}>
+          <Text style={styles.label}>نسبة الضريبة (%)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="0 - 100"
+            value={taxRatePercent}
+            onChangeText={setTaxRatePercent}
+            keyboardType="numeric"
+          />
+          <Text style={{ color: colors.textLight, marginTop: 4 }}>
+            تُطبّق الضريبة على المجموع الفرعي قبل الخصومات. أدخل 0 إذا لا توجد ضريبة.
+          </Text>
         </View>
 
         {/* Category */}
@@ -534,10 +765,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.background,
   },
+  addSmallButton: {
+    borderRadius: borderRadius.lg,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderStyle: 'dashed',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    gap: spacing.xs,
+  },
   addImageText: {
     ...typography.caption,
     color: colors.textLight,
     marginTop: spacing.xs,
+  },
+  smallButtonText: {
+    ...typography.body,
+    color: colors.textLight,
+  },
+  removePdfButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: colors.error,
+    backgroundColor: colors.error + '10',
+    marginTop: spacing.sm,
+  },
+  removePdfButtonText: {
+    ...typography.body,
+    color: colors.error,
+    fontWeight: '600',
   },
   categoryContainer: {
     flexDirection: 'row',

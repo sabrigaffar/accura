@@ -36,7 +36,7 @@ export default function SponsoredStories({ stories }: SponsoredStoriesProps) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>💰 عروض مموّلة</Text>
-        <TouchableOpacity>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="عرض جميع العروض المموّلة">
           <Text style={styles.seeAll}>المزيد →</Text>
         </TouchableOpacity>
       </View>
@@ -52,6 +52,8 @@ export default function SponsoredStories({ stories }: SponsoredStoriesProps) {
             style={styles.storyItem}
             onPress={() => handleStoryPress(story)}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={`عرض إعلان ${story.merchantName}`}
           >
             {/* Gradient Border */}
             <LinearGradient

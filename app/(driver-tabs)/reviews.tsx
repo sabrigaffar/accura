@@ -44,28 +44,34 @@ export default function DriverReviews() {
   const fetchReviews = async () => {
     try {
       setLoading(true);
+      const [aggRes, listRes] = await Promise.all([
+        supabase
+          .from('driver_profiles')
+          .select('average_rating, reviews_count')
+          .eq('id', user?.id)
+          .single(),
+        supabase
+          .from('reviews')
+          .select(`
+            id,
+            rating,
+            comment,
+            created_at,
+            order:orders!reviews_order_id_fkey (
+              order_number
+            ),
+            reviewer:profiles!reviews_reviewer_id_fkey (
+              full_name
+            )
+          `)
+          .eq('reviewee_id', user?.id)
+          .eq('reviewee_type', 'driver')
+          .order('created_at', { ascending: false })
+      ]);
 
-      const { data: reviewsData, error } = await supabase
-        .from('reviews')
-        .select(`
-          id,
-          rating,
-          comment,
-          created_at,
-          order:orders!reviews_order_id_fkey (
-            order_number
-          ),
-          reviewer:profiles!reviews_reviewer_id_fkey (
-            full_name
-          )
-        `)
-        .eq('reviewee_id', user?.id)
-        .eq('reviewee_type', 'driver')
-        .order('created_at', { ascending: false });
+      if (listRes.error) throw listRes.error;
 
-      if (error) throw error;
-
-      const formattedReviews = reviewsData.map((review: any) => ({
+      const formattedReviews = (listRes.data || []).map((review: any) => ({
         id: review.id,
         rating: review.rating,
         comment: review.comment,
@@ -75,7 +81,20 @@ export default function DriverReviews() {
       }));
 
       setReviews(formattedReviews);
-      calculateStats(formattedReviews);
+
+      // حساب توزيع النجوم من القائمة الحالية
+      const distribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 } as any;
+      let sum = 0;
+      formattedReviews.forEach((r) => { distribution[r.rating]++; sum += r.rating; });
+
+      const aggAvg = Number(aggRes?.data?.average_rating ?? 0) || 0;
+      const aggCnt = Number(aggRes?.data?.reviews_count ?? 0) || 0;
+
+      setStats({
+        totalReviews: aggCnt || formattedReviews.length,
+        averageRating: aggCnt ? aggAvg : (formattedReviews.length ? sum / formattedReviews.length : 0),
+        ratingDistribution: distribution,
+      });
     } catch (error) {
       console.error('Error fetching reviews:', error);
     } finally {

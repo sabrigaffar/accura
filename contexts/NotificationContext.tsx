@@ -134,12 +134,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         setNotifications((prev) => [notification, ...prev]);
         setUnreadCount((prev) => prev + 1);
 
-        // إرسال إشعار محلي
-        await notificationService.sendLocalNotification(
-          notification.title,
-          notification.body,
-          notification.data
-        );
+        // Fallback: إذا لم يكن لدينا Push Token (مثل Expo Go على أندرويد)،
+        // نُرسل إشعاراً محلياً لتجربة المستخدم في المقدمة فقط.
+        try {
+          const hasPush = !!notificationService.getPushToken();
+          if (!hasPush) {
+            await notificationService.sendLocalNotification(
+              notification.title,
+              notification.body,
+              notification.data
+            );
+          }
+        } catch {}
       }
     );
 

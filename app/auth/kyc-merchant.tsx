@@ -57,10 +57,17 @@ export default function MerchantKycScreen() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
+
   const pickImage = async (setter: (uri: string) => void) => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsEditing: true,
         aspect: [3, 2],
         quality: 0.8,

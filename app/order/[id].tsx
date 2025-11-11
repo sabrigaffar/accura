@@ -100,6 +100,12 @@ export default function OrderDetailScreen() {
   const [complaintImages, setComplaintImages] = useState<string[]>([]);
 
   // Complaint helpers (inside component to access state)
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
   const pickComplaintImage = async () => {
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -108,7 +114,7 @@ export default function OrderDetailScreen() {
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsEditing: true,
         quality: 0.8,
       });

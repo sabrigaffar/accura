@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -32,6 +32,8 @@ import SponsoredStories from '@/components/home/SponsoredStories';
 import QuickActions from '@/components/home/QuickActions';
 import FeaturedStores from '@/components/home/FeaturedStores';
 import { useSponsoredAds, transformAdsForBanner, transformAdsForStories, transformAdsForFeatured } from '@/hooks/useSponsoredAds';
+import { MerchantGridCardSkeleton } from '@/components/ui/Skeleton';
+import * as Haptics from 'expo-haptics';
 
 const CATEGORIES = [
   { id: 'restaurant', name: 'مطاعم', icon: UtensilsCrossed, color: '#FF6B6B' },
@@ -102,34 +104,74 @@ export default function HomeScreen() {
   // Hook الموقع
   const { location, getCurrentLocation, loading: locationLoading } = useLocation();
 
+  // ----- Reverse geocoding throttle + cache -----
+  const lastReverseGeocodeTs = useRef(0);
+  const GEOCODE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+  const GEOCODE_MIN_INTERVAL_MS = 5000; // 5s between calls to avoid rate limit
+
+  const reverseGeocodeWithCache = useCallback(async (lat: number, lon: number): Promise<string | null> => {
+    try {
+      // Round coordinates to 3 decimals (~110m) to increase cache hits
+      const round = (x: number) => Math.round(x * 1000) / 1000;
+      const rlat = round(lat);
+      const rlon = round(lon);
+      const key = `reverse_geocode_cache:${rlat}:${rlon}`;
+
+      // Read cache first
+      const cached = await AsyncStorage.getItem(key);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as { ts: number; text: string };
+          if (Date.now() - parsed.ts < GEOCODE_TTL_MS) {
+            return parsed.text;
+          }
+        } catch {}
+      }
+
+      // Throttle requests
+      const now = Date.now();
+      if (now - lastReverseGeocodeTs.current < GEOCODE_MIN_INTERVAL_MS) {
+        // If throttled, return stale cached value if exists
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached) as { ts: number; text: string };
+            return parsed.text;
+          } catch {}
+        }
+        return null;
+      }
+
+      // Perform reverse geocode
+      lastReverseGeocodeTs.current = now;
+      const address = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+      if (address && address[0]) {
+        const { city, district, street, region, name } = address[0] as any;
+        const parts = [city || region || '', district || '', street || name || ''].filter(Boolean);
+        const text = parts.join('، ') || 'الموقع الحالي';
+        try { await AsyncStorage.setItem(key, JSON.stringify({ ts: Date.now(), text })); } catch {}
+        return text;
+      }
+      return null;
+    } catch (err) {
+      // Swallow rate limit errors gracefully
+      console.warn('reverseGeocode skipped:', (err as any)?.message || err);
+      return null;
+    }
+  }, [GEOCODE_TTL_MS]);
+
   // تحديد الموقع عند تحميل الصفحة
   useEffect(() => {
     (async () => {
       const loc = await getCurrentLocation();
       if (loc) {
-        // الحصول على اسم المنطقة من الإحداثيات
-        try {
-          const address = await Location.reverseGeocodeAsync({
-            latitude: loc.latitude,
-            longitude: loc.longitude
-          });
-          
-          if (address && address[0]) {
-            const { city, district, street } = address[0];
-            const locationStr = `${city || ''}${district ? '، ' + district : ''}${street ? '، ' + street : ''}`;
-            setLocationText(locationStr || 'الموقع الحالي');
-          } else {
-            setLocationText('الموقع الحالي');
-          }
-        } catch (err) {
-          console.error('Error getting address:', err);
-          setLocationText('الموقع الحالي');
-        }
+        // الحصول على اسم المنطقة من الإحداثيات مع كاش وثروتل
+        const text = await reverseGeocodeWithCache(loc.latitude, loc.longitude);
+        setLocationText(text || 'الموقع الحالي');
       } else {
         setLocationText('الرياض، حي النخيل'); // fallback
       }
     })();
-  }, []);
+  }, [reverseGeocodeWithCache]);
 
   useEffect(() => {
     fetchMerchants();
@@ -426,7 +468,7 @@ export default function HomeScreen() {
           p_lng: pos.coords.longitude,
           p_radius_km: 10,
         });
-        if (!error && Array.isArray(data)) {
+        if (!error && Array.isArray(data) && data.length > 0) {
           // تطبيق تصفية الفئة/البحث محلياً على النتائج القريبة
           let rows = data as NearbyMerchant[];
           const q = searchQuery.trim();
@@ -442,12 +484,46 @@ export default function HomeScreen() {
           setMerchants(rows);
           return;
         }
+
+        // محاولة احتياطية: دالة Haversine بدون PostGIS
+        const alt = await supabase.rpc('merchants_nearby_haversine', {
+          p_lat: pos.coords.latitude,
+          p_lng: pos.coords.longitude,
+          p_radius_km: 10,
+        });
+        if (!alt.error && Array.isArray(alt.data) && alt.data.length > 0) {
+          let rows = alt.data as NearbyMerchant[];
+          const q = searchQuery.trim();
+          if (selectedCategory !== 'all') rows = rows.filter(r => r.category === selectedCategory);
+          if (q) rows = rows.filter(r => (r.name_ar || '').toLowerCase().includes(q.toLowerCase()) || (r.description_ar || '').toLowerCase().includes(q.toLowerCase()));
+          setMerchants(rows);
+          return;
+        }
       }
 
       // سقوط: القوائم النشطة كما كانت
       const rpc = await supabase.rpc('list_active_merchants');
       if (!rpc.error && Array.isArray(rpc.data)) {
         let rows = rpc.data as any[];
+        // احسب المسافة يدوياً إن كان لدينا موقع المستخدم
+        try {
+          const pos2 = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const lat = pos2.coords.latitude;
+          const lng = pos2.coords.longitude;
+          const toRad = (x: number) => (x * Math.PI) / 180;
+          rows = rows.map((m: any) => {
+            if (m.latitude != null && m.longitude != null) {
+              const R = 6371;
+              const dLat = toRad(Number(m.latitude) - lat);
+              const dLon = toRad(Number(m.longitude) - lng);
+              const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) * Math.sin(dLon / 2) ** 2;
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              const d = R * c;
+              return { ...m, distance_km: d };
+            }
+            return m;
+          });
+        } catch {}
         const q = searchQuery.trim();
         if (selectedCategory !== 'all') rows = rows.filter(r => r.category === selectedCategory);
         if (q) rows = rows.filter(r => (r.name_ar || '').toLowerCase().includes(q.toLowerCase()) || (r.description_ar || '').toLowerCase().includes(q.toLowerCase()));
@@ -466,7 +542,27 @@ export default function HomeScreen() {
       if (sq) q1 = q1.or(`name_ar.ilike.%${sq}%,description_ar.ilike.%${sq}%`);
       const res1 = await q1;
       if (!res1.error && Array.isArray(res1.data)) {
-        setMerchants(res1.data as any);
+        let rows: any[] = res1.data as any[];
+        // احسب المسافة يدوياً إن أمكن
+        try {
+          const pos3 = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const lat = pos3.coords.latitude;
+          const lng = pos3.coords.longitude;
+          const toRad = (x: number) => (x * Math.PI) / 180;
+          rows = rows.map((m: any) => {
+            if (m.latitude != null && m.longitude != null) {
+              const R = 6371;
+              const dLat = toRad(Number(m.latitude) - lat);
+              const dLon = toRad(Number(m.longitude) - lng);
+              const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) * Math.sin(dLon / 2) ** 2;
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              const d = R * c;
+              return { ...m, distance_km: d };
+            }
+            return m;
+          });
+        } catch {}
+        setMerchants(rows as any);
         return;
       }
 
@@ -477,6 +573,25 @@ export default function HomeScreen() {
         .limit(100);
       if (!res2.error && Array.isArray(res2.data)) {
         let rows = res2.data as any[];
+        // احسب المسافة يدوياً إن أمكن
+        try {
+          const pos4 = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const lat = pos4.coords.latitude;
+          const lng = pos4.coords.longitude;
+          const toRad = (x: number) => (x * Math.PI) / 180;
+          rows = rows.map((m: any) => {
+            if (m.latitude != null && m.longitude != null) {
+              const R = 6371;
+              const dLat = toRad(Number(m.latitude) - lat);
+              const dLon = toRad(Number(m.longitude) - lng);
+              const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) * Math.sin(dLon / 2) ** 2;
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              const d = R * c;
+              return { ...m, distance_km: d };
+            }
+            return m;
+          });
+        } catch {}
         if (selectedCategory !== 'all') rows = rows.filter(r => r.category === selectedCategory);
         const sq2 = searchQuery.trim();
         if (sq2) rows = rows.filter(r => (r.name_ar || '').toLowerCase().includes(sq2.toLowerCase()) || (r.description_ar || '').toLowerCase().includes(sq2.toLowerCase()));
@@ -496,6 +611,8 @@ export default function HomeScreen() {
     <TouchableOpacity
       style={styles.merchantCard}
       onPress={() => router.push({ pathname: '/merchant/[id]', params: { id: item.id } })}
+      accessibilityRole="button"
+      accessibilityLabel={`فتح صفحة ${item.name_ar}`}
     >
       <View style={styles.merchantImage}>
         { (item.banner_url || item.logo_url) ? (
@@ -511,19 +628,19 @@ export default function HomeScreen() {
           {item.name_ar}
         </Text>
         <View style={styles.merchantMeta}>
-          <Text style={styles.rating}>⭐ {item.rating.toFixed(1)}</Text>
+          <Text style={styles.rating}>⭐⭐⭐⭐⭐ {item.rating.toFixed(1)}</Text>
           <Text style={styles.metaDivider}>•</Text>
           <Text style={styles.deliveryTime}>{item.avg_delivery_time} دقيقة</Text>
+          {typeof item.distance_km === 'number' && (
+            <>
+              <Text style={styles.metaDivider}>•</Text>
+              <Text style={styles.deliveryTime}>{item.distance_km.toFixed(1)} كم</Text>
+            </>
+          )}
         </View>
         <View style={styles.deliveryFeeContainer}>
           <Text style={styles.deliveryFee}>
             {item.delivery_fee === 0 ? 'توصيل مجاني' : `${item.delivery_fee} جنيه توصيل`}
-          </Text>
-        </View>
-        <View style={styles.merchantMeta}>
-          <MapPin size={14} color={theme.textLight} />
-          <Text style={styles.deliveryTime}>
-            {typeof item.distance_km === 'number' ? `${item.distance_km.toFixed(1)} كم` : ''}
           </Text>
         </View>
         {!item.is_open && (
@@ -729,7 +846,7 @@ export default function HomeScreen() {
                     styles.categoryCard,
                     isSelected && styles.categoryCardSelected,
                   ]}
-                  onPress={() => setSelectedCategory(category.id)}
+                  onPress={() => { try { Haptics.selectionAsync(); } catch {}; setSelectedCategory(category.id); }}
                 >
                   <View
                     style={[
@@ -760,8 +877,13 @@ export default function HomeScreen() {
           </View>
 
           {loading ? (
-            <View style={styles.loadingContainer}>
-              <Text style={styles.loadingText}>جاري التحميل...</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: spacing.md }}>
+              <MerchantGridCardSkeleton />
+              <MerchantGridCardSkeleton />
+              <MerchantGridCardSkeleton />
+              <MerchantGridCardSkeleton />
+              <MerchantGridCardSkeleton />
+              <MerchantGridCardSkeleton />
             </View>
           ) : merchants.length === 0 ? (
             <View style={styles.emptyContainer}>

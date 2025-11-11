@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView } from 'react-native';
 import { Store, ChevronDown, Check, Plus, Grid } from 'lucide-react-native';
+import * as Location from 'expo-location';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
 import { useActiveStore } from '@/contexts/ActiveStoreContext';
 import { router } from 'expo-router';
@@ -12,6 +13,42 @@ interface StoreSelectorProps {
 
 export function StoreSelector({ visible, onClose }: StoreSelectorProps) {
   const { activeStore, stores, setActiveStore, isAllStoresSelected } = useActiveStore();
+  const [currentCoords, setCurrentCoords] = React.useState<{ lat: number; lng: number } | null>(null);
+  const [distanceByStore, setDistanceByStore] = React.useState<Record<string, number>>({});
+
+  const toRad = (x: number) => (x * Math.PI) / 180;
+  const distanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // km
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  React.useEffect(() => {
+    (async () => {
+      if (!visible) return;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== Location.PermissionStatus.GRANTED) return;
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setCurrentCoords(coords);
+        const map: Record<string, number> = {};
+        for (const s of stores) {
+          const lat = (s as any).latitude != null ? Number((s as any).latitude) : null;
+          const lng = (s as any).longitude != null ? Number((s as any).longitude) : null;
+          if (lat != null && lng != null) {
+            map[s.id] = distanceKm(coords.lat, coords.lng, lat, lng);
+          }
+        }
+        setDistanceByStore(map);
+      } catch {}
+    })();
+  }, [visible, stores]);
 
   const handleSelectStore = (store: any) => {
     setActiveStore(store);
@@ -87,7 +124,10 @@ export function StoreSelector({ visible, onClose }: StoreSelectorProps) {
                   ]}>
                     {store.name_ar}
                   </Text>
-                  <Text style={styles.storeCategory}>{store.category}</Text>
+                  <Text style={styles.storeCategory}>
+                    {store.category}
+                    {distanceByStore[store.id] != null ? ` • ${distanceByStore[store.id].toFixed(1)} كم` : ''}
+                  </Text>
                 </View>
                 {activeStore?.id === store.id && (
                   <Check size={20} color={colors.primary} />

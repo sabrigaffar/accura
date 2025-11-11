@@ -15,6 +15,7 @@ import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { Search, Filter, UtensilsCrossed, Clock, CheckCircle, XCircle, MapPin } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import * as Location from 'expo-location';
+import { MerchantCardSkeleton } from '@/components/ui/Skeleton';
 
 interface Merchant {
   id: string;
@@ -52,6 +53,9 @@ export default function MerchantsScreen() {
   }, [merchants, searchQuery, selectedCategory]);
 
   const fetchMerchants = async () => {
+    // عرّف إحداثيات خارج try حتى تتاح في المسارات الاحتياطية/‏catch
+    let lat: number | null = null;
+    let lng: number | null = null;
     try {
       setLoading(true);
       // احصل على موقع العميل ثم اعرض المتاجر القريبة ضمن 10 كم
@@ -62,21 +66,115 @@ export default function MerchantsScreen() {
         return;
       }
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const lat = loc.coords.latitude;
-      const lng = loc.coords.longitude;
+      lat = loc.coords.latitude;
+      lng = loc.coords.longitude;
       const { data, error } = await supabase.rpc('merchants_nearby', {
         p_lat: lat,
         p_lng: lng,
         p_radius_km: nearbyRadiusKm,
       });
-      if (error) throw error;
-      const rows = Array.isArray(data) ? (data as any[]) : [];
-      setMerchants(rows as any);
-      setFilteredMerchants(rows as any);
+      if (!error && Array.isArray(data)) {
+        const rows = data as any[];
+        setMerchants(rows as any);
+        setFilteredMerchants(rows as any);
+      } else {
+        // محاولة الاحتياط الأولى: دالة Haversine بدون PostGIS
+        if (lat != null && lng != null) {
+          const alt = await supabase.rpc('merchants_nearby_haversine', { p_lat: lat, p_lng: lng, p_radius_km: nearbyRadiusKm });
+          if (!alt.error && Array.isArray(alt.data)) {
+            setMerchants(alt.data as any);
+            setFilteredMerchants(alt.data as any);
+            return;
+          }
+        }
+        // Fallbacks إضافية عند فشل PostGIS/Haversine أو عدم وجود نتائج
+        const rpc = await supabase.rpc('list_active_merchants');
+        if (!rpc.error && Array.isArray(rpc.data)) {
+          setMerchants(rpc.data as any);
+          setFilteredMerchants(rpc.data as any);
+        } else {
+          const q = await supabase
+            .from('merchants')
+            .select('*')
+            .eq('is_active', true)
+            .order('created_at', { ascending: false })
+            .limit(100);
+          if (!q.error && Array.isArray(q.data)) {
+            // احسب المسافة يدوياً إن توفرت إحداثيات المتجر
+            const withDist = (q.data as any[]).map((m: any) => {
+              if (lat != null && lng != null && m.latitude != null && m.longitude != null) {
+                const toRad = (x: number) => (x * Math.PI) / 180;
+                const R = 6371;
+                const dLat = toRad(Number(m.latitude) - lat);
+                const dLon = toRad(Number(m.longitude) - lng);
+                const a = Math.sin(dLat / 2) ** 2 +
+                  Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) *
+                  Math.sin(dLon / 2) ** 2;
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                const d = R * c;
+                return { ...m, distance_km: d };
+              }
+              return m;
+            });
+            setMerchants(withDist as any);
+            setFilteredMerchants(withDist as any);
+          } else {
+            setMerchants([]);
+            setFilteredMerchants([]);
+          }
+        }
+      }
     } catch (error) {
       console.error('Error fetching nearby merchants:', error);
-      setMerchants([]);
-      setFilteredMerchants([]);
+      // عند أي خطأ (مثل SRID مفقود)، استخدم المسارات الاحتياطية
+      try {
+        // حاول دالة Haversine أولاً إن كانت الإحداثيات متاحة
+        if (lat != null && lng != null) {
+          const alt = await supabase.rpc('merchants_nearby_haversine', { p_lat: lat, p_lng: lng, p_radius_km: nearbyRadiusKm });
+          if (!alt.error && Array.isArray(alt.data)) {
+            setMerchants(alt.data as any);
+            setFilteredMerchants(alt.data as any);
+            return;
+          }
+        }
+        const rpc = await supabase.rpc('list_active_merchants');
+        if (!rpc.error && Array.isArray(rpc.data)) {
+          setMerchants(rpc.data as any);
+          setFilteredMerchants(rpc.data as any);
+        } else {
+          const q = await supabase
+            .from('merchants')
+            .select('*')
+            .eq('is_active', true)
+            .order('created_at', { ascending: false })
+            .limit(100);
+          if (!q.error && Array.isArray(q.data)) {
+            const withDist = (q.data as any[]).map((m: any) => {
+              if (lat != null && lng != null && m.latitude != null && m.longitude != null) {
+                const toRad = (x: number) => (x * Math.PI) / 180;
+                const R = 6371;
+                const dLat = toRad(Number(m.latitude) - lat);
+                const dLon = toRad(Number(m.longitude) - lng);
+                const a = Math.sin(dLat / 2) ** 2 +
+                  Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) *
+                  Math.sin(dLon / 2) ** 2;
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                const d = R * c;
+                return { ...m, distance_km: d };
+              }
+              return m;
+            });
+            setMerchants(withDist as any);
+            setFilteredMerchants(withDist as any);
+          } else {
+            setMerchants([]);
+            setFilteredMerchants([]);
+          }
+        }
+      } catch {
+        setMerchants([]);
+        setFilteredMerchants([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -184,8 +282,15 @@ export default function MerchantsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={theme.primary} />
+      <View style={styles.container}>
+        <View style={{ paddingVertical: spacing.md }}>
+          <MerchantCardSkeleton />
+          <MerchantCardSkeleton />
+          <MerchantCardSkeleton />
+          <MerchantCardSkeleton />
+          <MerchantCardSkeleton />
+          <MerchantCardSkeleton />
+        </View>
       </View>
     );
   }

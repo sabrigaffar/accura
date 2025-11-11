@@ -17,6 +17,7 @@ type PlatformSettings = {
   service_fee_flat: number;
   driver_commission_per_km: number;
   driver_commission_free_until: string | null;
+  base_fee_per_km: number;
   merchant_commission_rate: number;
   merchant_commission_flat: number;
   merchant_commission_apply_on_cash: boolean;

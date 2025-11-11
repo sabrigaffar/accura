@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Stack } from 'expo-router';
 import { MapPin, Plus, Edit3, Trash2 } from 'lucide-react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -153,9 +154,14 @@ export default function AddressesScreen() {
         try {
           const parts = [city.trim(), district.trim(), street.trim()].filter(Boolean).join(', ');
           const formatted = buildingNumber.trim() ? `${parts}, عمارة ${buildingNumber.trim()}` : parts;
+          const patch: any = { address: formatted, updated_at: new Date().toISOString() };
+          if (currentLatitude && currentLongitude) {
+            patch.latitude = currentLatitude;
+            patch.longitude = currentLongitude;
+          }
           await supabase
             .from('merchants')
-            .update({ address: formatted, updated_at: new Date().toISOString() })
+            .update(patch)
             .eq('owner_id', user.id);
         } catch {}
       }
@@ -338,6 +344,7 @@ export default function AddressesScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <Stack.Screen options={{ headerShown: true, title: 'عناويني', headerBackTitle: 'رجوع' }} />
       <View style={styles.header}>
         <Text style={styles.headerTitle}>عناويني</Text>
       </View>

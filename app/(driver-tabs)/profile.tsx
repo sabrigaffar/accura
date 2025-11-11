@@ -151,8 +151,8 @@ export default function DriverProfile() {
           text: 'تسجيل الخروج',
           style: 'destructive',
           onPress: async () => {
-            await signOut();
             router.replace('/auth');
+            setTimeout(() => { signOut(); }, 0);
           }
         }
       ]
@@ -215,13 +215,17 @@ export default function DriverProfile() {
 
           <View style={styles.actionsRow}>
             <TouchableOpacity style={styles.primaryBtn} onPress={() => pickAndUpload('driver', 'library')} disabled={loading}>
-              {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.primaryBtnText}>تغيير صورة السائق</Text>}
+              {loading ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.primaryBtnText} numberOfLines={1} ellipsizeMode="tail">تغيير صورة السائق</Text>
+              )}
             </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => pickAndUpload('avatar', 'library')} disabled={loading}>
-              <Text style={styles.secondaryBtnText}>تغيير صورة الحساب</Text>
+              <Text style={styles.secondaryBtnText} numberOfLines={1} ellipsizeMode="tail">تغيير صورة الحساب</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => pickAndUpload('driver', 'camera')} disabled={loading}>
-              <Text style={styles.secondaryBtnText}>التقاط بالكاميرا</Text>
+              <Text style={styles.secondaryBtnText} numberOfLines={1} ellipsizeMode="tail">التقاط بالكاميرا</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -260,11 +264,11 @@ const createStyles = (colors: any) => StyleSheet.create({
   name: { ...typography.h2, color: colors.text, marginBottom: spacing.md },
   badge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.primary + '20', paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: borderRadius.lg, gap: spacing.xs },
   badgeText: { ...typography.caption, color: colors.primary, fontWeight: '600' },
-  actionsRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
-  primaryBtn: { backgroundColor: colors.primary, paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderRadius: borderRadius.lg },
-  primaryBtnText: { ...typography.bodyMedium, color: colors.white },
-  secondaryBtn: { borderWidth: 1, borderColor: colors.primary, paddingVertical: spacing.md, paddingHorizontal: spacing.lg, borderRadius: borderRadius.lg },
-  secondaryBtnText: { ...typography.bodyMedium, color: colors.primary },
+  actionsRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.sm },
+  primaryBtn: { backgroundColor: colors.primary, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderRadius: borderRadius.lg, flexBasis: '48%', flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
+  primaryBtnText: { ...typography.body, color: colors.white },
+  secondaryBtn: { borderWidth: 1, borderColor: colors.primary, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderRadius: borderRadius.lg, flexBasis: '48%', flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
+  secondaryBtnText: { ...typography.body, color: colors.primary },
   menuContainer: { marginTop: spacing.lg, backgroundColor: colors.white },
   menuItem: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, borderBottomWidth: 1, borderBottomColor: colors.border },
   menuIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary + '10', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },

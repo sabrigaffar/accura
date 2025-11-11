@@ -13,6 +13,7 @@ import {
   Tajawal_500Medium,
   Tajawal_700Bold,
 } from '@expo-google-fonts/tajawal';
+import { Lemonada_500Medium } from '@expo-google-fonts/lemonada';
 import * as SplashScreen from 'expo-splash-screen';
 import { I18nManager } from 'react-native';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -22,6 +23,10 @@ import { ThemeProvider } from '@/contexts/ThemeContext';
 import { PushNotificationProvider } from '@/contexts/PushNotificationContext';
 import { RoleNavigator } from '@/components/RoleNavigator';
 import { CartProvider } from '@/contexts/CartContext';
+import { refreshBaseFeePerKm } from '@/lib/deliveryFeeCalculator';
+import { ToastProvider } from '@/contexts/ToastContext';
+import ErrorBoundary from '@/components/ErrorBoundary';
+import NetworkBanner from '@/components/NetworkBanner';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -40,6 +45,7 @@ export default function RootLayout() {
     Tajawal_400Regular,
     Tajawal_500Medium,
     Tajawal_700Bold,
+    Lemonada_500Medium,
   });
 
   useEffect(() => {
@@ -47,6 +53,11 @@ export default function RootLayout() {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, fontError]);
+
+  // Pre-warm base_fee_per_km cache at app start
+  useEffect(() => {
+    refreshBaseFeePerKm().catch(() => {});
+  }, []);
 
   if (!fontsLoaded && !fontError) {
     return null;
@@ -59,10 +70,15 @@ export default function RootLayout() {
           <NotificationProvider>
             <ChatProvider>
               <CartProvider>
-                <RoleNavigator>
-                  <StatusBar style="auto" />
-                  <Stack screenOptions={{ headerShown: false, gestureEnabled: false }} />
-                </RoleNavigator>
+                <ToastProvider>
+                  <ErrorBoundary>
+                    <RoleNavigator>
+                      <StatusBar style="auto" />
+                      <NetworkBanner />
+                      <Stack screenOptions={{ headerShown: false, gestureEnabled: false }} />
+                    </RoleNavigator>
+                  </ErrorBoundary>
+                </ToastProvider>
               </CartProvider>
             </ChatProvider>
           </NotificationProvider>

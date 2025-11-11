@@ -7,6 +7,8 @@ interface Store {
   name_ar: string;
   category: string;
   is_active: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 interface ActiveStoreContextType {
@@ -38,7 +40,7 @@ export function ActiveStoreProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       const { data, error } = await supabase
         .from('merchants')
-        .select('id, name_ar, category, is_active')
+        .select('id, name_ar, category, is_active, latitude, longitude')
         .eq('owner_id', profile.id)
         .eq('is_active', true)
         .order('created_at', { ascending: true });

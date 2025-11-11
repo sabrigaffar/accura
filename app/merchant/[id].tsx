@@ -15,7 +15,9 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useCart } from '@/contexts/CartContext';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
-import { ArrowLeft, Star, Clock, ShoppingCart } from 'lucide-react-native';
+import { ArrowLeft, Star, Clock, ShoppingCart, X } from 'lucide-react-native';
+// @ts-ignore ensure to install: expo install react-native-webview
+import { WebView } from 'react-native-webview';
 
 interface Merchant {
   id: string;
@@ -34,6 +36,7 @@ interface Merchant {
   is_open: boolean;
   address: string;
   is_active: boolean;
+  menu_url?: string | null;
 }
 
 interface Product {
@@ -66,6 +69,9 @@ export default function MerchantDetailScreen() {
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedQty, setSelectedQty] = useState<number>(1);
   const [note, setNote] = useState<string>('');
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [menuImages, setMenuImages] = useState<string[]>([]);
+  const [menuImageIndex, setMenuImageIndex] = useState(0);
 
   useEffect(() => {
     if (merchantId) {
@@ -94,6 +100,17 @@ export default function MerchantDetailScreen() {
         return;
       }
       setMerchant(data);
+      // Fetch menu images (multiple)
+      try {
+        const { data: imgs, error: imgsErr } = await supabase
+          .from('merchant_menu_images')
+          .select('image_url, sort_order')
+          .eq('merchant_id', data.id)
+          .order('sort_order', { ascending: true });
+        if (!imgsErr) {
+          setMenuImages((imgs || []).map((r: any) => r.image_url));
+        }
+      } catch {}
       
       // جلب المنتجات باستخدام store_id (معرف المتجر الفعلي)
       if (data?.id) {
@@ -102,6 +119,25 @@ export default function MerchantDetailScreen() {
     } catch (error) {
       console.error('Error fetching merchant:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء تحميل بيانات المتجر');
+    }
+  };
+
+  const openMenu = async (startIndex: number = 0) => {
+    // افتح المودال دائماً: PDF عبر WebView، الصور عبر WebView قابل للتكبير
+    if (menuImages.length > 0) {
+      setMenuImageIndex(Math.max(0, Math.min(startIndex, menuImages.length - 1)));
+      setMenuVisible(true);
+      return;
+    }
+    // لا يوجد صور متعددة، جرّب menu_url كصورة
+    if (merchant?.menu_url) {
+      if (/\.pdf($|\?)/i.test(merchant.menu_url)) {
+        setMenuVisible(true);
+      } else {
+        setMenuImages([merchant.menu_url]);
+        setMenuImageIndex(0);
+        setMenuVisible(true);
+      }
     }
   };
 
@@ -350,6 +386,21 @@ export default function MerchantDetailScreen() {
               الحد الأدنى للطلب: {merchant.min_order_amount} جنيه
             </Text>
           </View>
+
+          {(merchant.menu_url || menuImages.length > 0) ? (
+            <TouchableOpacity style={styles.menuButton} onPress={() => openMenu(0)}>
+              <Text style={styles.menuButtonText}>عرض المنيو</Text>
+            </TouchableOpacity>
+          ) : null}
+          {/* معاينة مصغرة لأول صفحة من PDF (رابط عام) */}
+          {merchant.menu_url && /\.pdf($|\?)/i.test(merchant.menu_url) && /^https?:\/\//i.test(merchant.menu_url) && (
+            <View style={{ height: 180, borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md, overflow: 'hidden', marginTop: spacing.sm, alignSelf: 'stretch' }}>
+              <WebView
+                source={{ uri: `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(merchant.menu_url)}` }}
+                style={{ flex: 1, backgroundColor: colors.lightGray }}
+              />
+            </View>
+          )}
           
           {!merchant.is_open && (
             <View style={styles.closedBadge}>
@@ -510,10 +561,54 @@ export default function MerchantDetailScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Menu Modal (image/PDF) */}
+      <Modal visible={menuVisible} animationType="fade" transparent onRequestClose={() => setMenuVisible(false)}>
+        <View style={styles.menuModalContainer}>
+          <TouchableOpacity style={styles.menuClose} onPress={() => setMenuVisible(false)}>
+            <X size={24} color="#fff" />
+          </TouchableOpacity>
+          {merchant?.menu_url && /\.pdf($|\?)/i.test(merchant.menu_url) && menuImages.length === 0 ? (
+            <WebView
+              source={{ uri: `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(merchant.menu_url)}` }}
+              style={{ width: '100%', height: '85%', backgroundColor: colors.lightGray }}
+            />
+          ) : (
+            <>
+              {/* عرض الصور مع قابلية التكبير عبر WebView */}
+              {menuImages.length > 0 ? (
+                <View style={{ width: '100%', height: '85%' }}>
+                  <WebView
+                    originWhitelist={["*"]}
+                    source={{ html: `<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=yes, maximum-scale=5\"></head><body style=\"margin:0;background:#111;display:flex;align-items:center;justify-content:center;height:100vh;\"><img src=\"${menuImages[menuImageIndex]}\" style=\"max-width:100%;max-height:100%\" /></body></html>` }}
+                    style={{ flex: 1, backgroundColor: '#111' }}
+                  />
+                  {menuImages.length > 1 && (
+                    <>
+                      <TouchableOpacity style={styles.navLeft} onPress={() => setMenuImageIndex(i => (i - 1 + menuImages.length) % menuImages.length)} />
+                      <TouchableOpacity style={styles.navRight} onPress={() => setMenuImageIndex(i => (i + 1) % menuImages.length)} />
+                      <View style={styles.pagerDots}>
+                        {menuImages.map((_, i) => (
+                          <View key={i} style={[styles.dot, i === menuImageIndex && styles.dotActive]} />
+                        ))}
+                      </View>
+                    </>
+                  )}
+                </View>
+              ) : merchant?.menu_url ? (
+                <WebView
+                  originWhitelist={["*"]}
+                  source={{ html: `<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=yes, maximum-scale=5\"></head><body style=\"margin:0;background:#111;display:flex;align-items:center;justify-content:center;height:100vh;\"><img src=\"${merchant.menu_url}\" style=\"max-width:100%;max-height:100%\" /></body></html>` }}
+                  style={{ width: '100%', height: '85%', backgroundColor: '#111' }}
+                />
+              ) : null}
+            </>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -629,15 +724,28 @@ const styles = StyleSheet.create({
     color: colors.textLight,
   },
   closedBadge: {
-    backgroundColor: colors.error + '20',
-    borderRadius: borderRadius.md,
+    backgroundColor: colors.error + '10',
     padding: spacing.sm,
-    marginTop: spacing.sm,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
   },
   closedText: {
     ...typography.body,
     color: colors.error,
     textAlign: 'center',
+  },
+  menuButton: {
+    marginTop: spacing.md,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.lg,
+    alignSelf: 'center',
+  },
+  menuButtonText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    fontWeight: '600',
   },
   section: {
     margin: spacing.md,
@@ -911,6 +1019,56 @@ const styles = StyleSheet.create({
   modalBtnText: {
     ...typography.bodyMedium,
     color: colors.text,
+  },
+  menuModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  navLeft: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: '25%',
+  },
+  navRight: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: '25%',
+  },
+  pagerDots: {
+    position: 'absolute',
+    bottom: spacing.md,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+  },
+  dotActive: {
+    backgroundColor: '#fff',
+  },
+  menuImage: {
+    width: '100%',
+    height: '80%',
+    borderRadius: borderRadius.md,
+  },
+  menuClose: {
+    position: 'absolute',
+    top: spacing.xl,
+    right: spacing.xl,
+    padding: spacing.sm,
   },
   backButtonText: {
     ...typography.body,

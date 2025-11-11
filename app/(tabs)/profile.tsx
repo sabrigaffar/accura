@@ -73,8 +73,8 @@ export default function ProfileScreen() {
         text: 'تسجيل الخروج',
         style: 'destructive',
         onPress: async () => {
-          await signOut();
           router.replace('/auth');
+          setTimeout(() => { signOut(); }, 0);
         },
       },
     ]);

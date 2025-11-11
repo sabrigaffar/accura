@@ -17,6 +17,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { formatCurrency, DEFAULT_CURRENCY, getCurrencyByCode } from '@/constants/currencies';
+import { getBaseFeePerKmCached, refreshBaseFeePerKm } from '@/lib/deliveryFeeCalculator';
 
 interface Earning {
   id: string;
@@ -57,6 +58,8 @@ export default function DriverEarnings() {
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
 
   useEffect(() => {
+    // تأكد من تحديث كاش سعر الكيلو الديناميكي للعرض الصحيح
+    refreshBaseFeePerKm().catch(() => {});
     fetchEarnings();
     fetchCurrency();
   }, []);
@@ -181,7 +184,7 @@ export default function DriverEarnings() {
       const processedEarnings: Earning[] = (earningsRows || []).map((earning: any) => {
         const order = Array.isArray(earning.order) ? earning.order[0] : earning.order;
         const customer = order?.customer ? (Array.isArray(order.customer) ? order.customer[0] : order.customer) : null;
-        const KM_FEE = 10; // مطابق للدالة على السيرفر
+        const KM_FEE = getBaseFeePerKmCached(); // مطابق لإعدادات المنصة ديناميكياً
         const orderDeliveryFee = Number(order?.delivery_fee ?? 0);
         const orderCalculatedFee = Number(order?.calculated_delivery_fee ?? 0);
         const orderDistanceKm = order?.delivery_distance_km !== undefined && order?.delivery_distance_km !== null

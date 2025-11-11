@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,16 +8,19 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   RefreshControl,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Linking } from 'react-native';
 
 import { supabase } from '@/lib/supabase';
-import { colors, spacing, borderRadius, typography } from '@/constants/theme';
+import { spacing, borderRadius, typography } from '@/constants/theme';
 import { ArrowLeft, Send, Phone } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import * as Haptics from 'expo-haptics';
+import { useToast } from '@/contexts/ToastContext';
+import { NotificationItemSkeleton } from '@/components/ui/Skeleton';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface Profile {
   full_name: string;
@@ -49,6 +52,9 @@ export default function ChatScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const { error: showToastError, info: showToastInfo } = useToast();
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   useEffect(() => {
     if (conversationId) {
@@ -166,7 +172,8 @@ export default function ChatScreen() {
         .neq('sender_id', user?.id);
     } catch (error) {
       console.error('Error fetching messages:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء تحميل الرسائل');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+      showToastError('حدث خطأ أثناء تحميل الرسائل');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -219,7 +226,8 @@ export default function ChatScreen() {
       }, 100);
     } catch (error) {
       console.error('Error sending message:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء إرسال الرسالة');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+      showToastError('حدث خطأ أثناء إرسال الرسالة');
     } finally {
       setSending(false);
     }
@@ -238,9 +246,27 @@ export default function ChatScreen() {
 
   if (loading && !refreshing) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.loadingText}>جاري تحميل الرسائل...</Text>
-      </View>
+      <KeyboardAvoidingView 
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+            <ArrowLeft size={24} color={theme.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>الدردشة</Text>
+          <View style={styles.callButton} />
+        </View>
+        <View style={{ padding: spacing.md }}>
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+        </View>
+      </KeyboardAvoidingView>
     );
   }
 
@@ -252,7 +278,7 @@ export default function ChatScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ArrowLeft size={24} color={colors.text} />
+          <ArrowLeft size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>الدردشة</Text>
         <TouchableOpacity 
@@ -261,11 +287,12 @@ export default function ChatScreen() {
             if (contactPhone) {
               Linking.openURL(`tel:${contactPhone}`);
             } else {
-              Alert.alert('خطأ', 'رقم الاتصال غير متوفر');
+              try { Haptics.selectionAsync(); } catch {}
+              showToastInfo('رقم الاتصال غير متوفر');
             }
           }}
         >
-          <Phone size={20} color={colors.primary} />
+          <Phone size={20} color={theme.primary} />
         </TouchableOpacity>
       </View>
 
@@ -328,7 +355,7 @@ export default function ChatScreen() {
           {sending ? (
             <Text style={styles.sendButtonText}>جاري الإرسال...</Text>
           ) : (
-            <Send size={20} color={colors.white} />
+            <Send size={20} color={theme.white} />
           )}
         </TouchableOpacity>
       </View>
@@ -336,10 +363,10 @@ export default function ChatScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   centerContainer: {
     flex: 1,
@@ -348,23 +375,23 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   backButton: {
     padding: spacing.sm,
   },
   headerTitle: {
     ...typography.h2,
-    color: colors.text,
+    color: theme.text,
     flex: 1,
     textAlign: 'center',
     marginRight: 40,
@@ -391,47 +418,59 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
   },
   myMessageBubble: {
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     borderBottomRightRadius: 0,
   },
   otherMessageBubble: {
-    backgroundColor: colors.lightGray,
+    backgroundColor: theme.lightGray,
     borderBottomLeftRadius: 0,
   },
   messageText: {
     ...typography.body,
+    color: theme.text,
+    lineHeight: 20,
   },
   myMessageText: {
-    color: colors.white,
+    color: theme.white,
   },
-  otherMessageText: {
-    color: colors.text,
+  messageFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+    gap: 4,
   },
   messageTime: {
     ...typography.caption,
-    marginTop: spacing.xs,
-    textAlign: 'right',
+    color: theme.textLight,
+    fontSize: 11,
   },
   myMessageTime: {
-    color: colors.white + 'CC',
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  otherMessageText: {
+    color: theme.text,
   },
   otherMessageTime: {
-    color: colors.textLight,
+    color: theme.textLight,
+  },
+  editedLabel: {
+    ...typography.caption,
+    color: theme.textLight,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
+    borderTopColor: theme.border,
   },
   messageInput: {
     flex: 1,
     ...typography.body,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: theme.border,
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -439,7 +478,7 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   sendButton: {
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     borderRadius: borderRadius.full,
     width: 40,
     height: 40,
@@ -452,6 +491,6 @@ const styles = StyleSheet.create({
   },
   sendButtonText: {
     ...typography.caption,
-    color: colors.white,
+    color: theme.white,
   },
 });

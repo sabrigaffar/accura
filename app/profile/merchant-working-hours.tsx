@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,11 +11,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ArrowLeft, Clock, Calendar } from 'lucide-react-native';
-import { colors, spacing, typography, borderRadius } from '@/constants/theme';
+import { spacing, typography, borderRadius } from '@/constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActiveStore } from '@/contexts/ActiveStoreContext';
+import { useTheme } from '@/contexts/ThemeContext';
+import { useToast } from '@/contexts/ToastContext';
+import * as Haptics from 'expo-haptics';
 
 type DaySchedule = {
   isOpen: boolean;
@@ -40,6 +43,9 @@ const DAYS = [
 export default function MerchantWorkingHours() {
   const { user } = useAuth();
   const { activeStore, isAllStoresSelected } = useActiveStore();
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { success: showToastSuccess, error: showToastError, info: showToastInfo } = useToast();
   const [merchantId, setMerchantId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [schedule, setSchedule] = useState<WeekSchedule>({
@@ -61,13 +67,15 @@ export default function MerchantWorkingHours() {
       setLoading(true);
       
       if (!user) {
-        Alert.alert('خطأ', 'يجب تسجيل الدخول أولاً');
+        try { Haptics.selectionAsync(); } catch {}
+        showToastInfo('يجب تسجيل الدخول أولاً');
         router.back();
         return;
       }
 
       // Check if a specific store is selected
       if (isAllStoresSelected || !activeStore) {
+        // إبقاء التنبيه التأكيدي لاحتياج المستخدم اختيار متجر
         Alert.alert(
           'اختر متجراً',
           'الرجاء اختيار متجر محدد لتحديد ساعات العمل',
@@ -85,7 +93,8 @@ export default function MerchantWorkingHours() {
 
       if (merchantError) {
         console.error('Error loading merchant:', merchantError);
-        Alert.alert('خطأ', 'فشل تحميل بيانات المتجر');
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+        showToastError('فشل تحميل بيانات المتجر');
         return;
       }
 
@@ -97,7 +106,8 @@ export default function MerchantWorkingHours() {
       }
     } catch (error) {
       console.error('Error:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء تحميل البيانات');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+      showToastError('حدث خطأ أثناء تحميل البيانات');
     } finally {
       setLoading(false);
     }
@@ -105,7 +115,8 @@ export default function MerchantWorkingHours() {
 
   const saveSchedule = async (newSchedule: WeekSchedule) => {
     if (!merchantId) {
-      Alert.alert('خطأ', 'لم يتم العثور على بيانات المتجر');
+      try { Haptics.selectionAsync(); } catch {}
+      showToastInfo('لم يتم العثور على بيانات المتجر');
       return;
     }
 
@@ -118,17 +129,20 @@ export default function MerchantWorkingHours() {
 
       if (error) {
         console.error('Error saving schedule:', error);
-        Alert.alert('خاطء', 'فشل حفظ ساعات العمل');
+        try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+        showToastError('فشل حفظ ساعات العمل');
         return;
       }
 
       // Also save locally as backup
       await AsyncStorage.setItem('merchant_working_hours', JSON.stringify(newSchedule));
       
-      Alert.alert('✅ تم', 'تم حفظ ساعات العمل بنجاح. سيتمكن العملاء من رؤيتها.');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+      showToastSuccess('تم حفظ ساعات العمل بنجاح');
     } catch (error) {
       console.error('Error:', error);
-      Alert.alert('خطأ', 'فشل حفظ ساعات العمل');
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+      showToastError('فشل حفظ ساعات العمل');
     }
   };
 
@@ -195,7 +209,7 @@ export default function MerchantWorkingHours() {
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <ArrowLeft size={24} color={colors.text} />
+            <ArrowLeft size={24} color={theme.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>ساعات العمل</Text>
           <View style={{ width: 60 }} />
@@ -212,7 +226,7 @@ export default function MerchantWorkingHours() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <ArrowLeft size={24} color={colors.text} />
+          <ArrowLeft size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>ساعات العمل</Text>
         <TouchableOpacity onPress={() => saveSchedule(schedule)}>
@@ -224,7 +238,7 @@ export default function MerchantWorkingHours() {
         {/* Quick Actions */}
         <View style={styles.quickActions}>
           <TouchableOpacity style={styles.quickButton} onPress={applyToAll}>
-            <Calendar size={20} color={colors.primary} />
+            <Calendar size={20} color={theme.primary} />
             <Text style={styles.quickButtonText}>تطبيق على الكل</Text>
           </TouchableOpacity>
         </View>
@@ -243,14 +257,14 @@ export default function MerchantWorkingHours() {
               >
                 <View style={styles.dayHeader}>
                   <View style={styles.dayInfo}>
-                    <Clock size={18} color={colors.textLight} />
+                    <Clock size={18} color={theme.textLight} />
                     <Text style={styles.dayLabel}>{day.label}</Text>
                   </View>
                   <Switch
                     value={schedule[day.key].isOpen}
                     onValueChange={() => toggleDay(day.key)}
-                    trackColor={{ false: colors.border, true: colors.primary }}
-                    thumbColor={colors.white}
+                    trackColor={{ false: theme.border, true: theme.primary }}
+                    thumbColor={theme.white}
                   />
                 </View>
 
@@ -286,7 +300,7 @@ export default function MerchantWorkingHours() {
 
         {/* Info */}
         <View style={styles.infoBox}>
-          <Clock size={20} color={colors.primary} />
+          <Clock size={20} color={theme.primary} />
           <Text style={styles.infoText}>
             سيتم عرض متجرك للعملاء فقط خلال ساعات العمل المحددة
           </Text>
@@ -296,30 +310,30 @@ export default function MerchantWorkingHours() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: spacing.lg,
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   backButton: {
     padding: spacing.xs,
   },
   headerTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
   },
   saveButton: {
     ...typography.bodyMedium,
-    color: colors.primary,
+    color: theme.primary,
     fontWeight: '600',
   },
   content: {
@@ -333,13 +347,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.primary + '10',
+    backgroundColor: theme.primary + '10',
     padding: spacing.md,
     borderRadius: borderRadius.md,
   },
   quickButtonText: {
     ...typography.bodyMedium,
-    color: colors.primary,
+    color: theme.primary,
     fontWeight: '600',
   },
   section: {
@@ -348,20 +362,20 @@ const styles = StyleSheet.create({
   sectionTitle: {
     ...typography.h3,
     fontSize: 16,
-    color: colors.text,
+    color: theme.text,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.sm,
   },
   card: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: colors.border,
+    borderColor: theme.border,
   },
   dayItem: {
     padding: spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   lastItem: {
     borderBottomWidth: 0,
@@ -379,7 +393,7 @@ const styles = StyleSheet.create({
   },
   dayLabel: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
     fontWeight: '600',
   },
   timeRow: {
@@ -389,41 +403,41 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     paddingTop: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: colors.border + '50',
+    borderTopColor: theme.border + '50',
   },
   timeButton: {
     alignItems: 'center',
     padding: spacing.sm,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
     borderRadius: borderRadius.md,
     minWidth: 100,
   },
   timeLabel: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
     marginBottom: spacing.xs,
   },
   timeValue: {
     ...typography.h3,
-    color: colors.primary,
+    color: theme.primary,
   },
   timeSeparator: {
     ...typography.h3,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   closedText: {
     ...typography.body,
-    color: colors.error,
+    color: theme.error,
     textAlign: 'center',
     marginTop: spacing.sm,
     paddingTop: spacing.sm,
     borderTopWidth: 1,
-    borderTopColor: colors.border + '50',
+    borderTopColor: theme.border + '50',
   },
   infoBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    backgroundColor: colors.primary + '10',
+    backgroundColor: theme.primary + '10',
     padding: spacing.lg,
     margin: spacing.lg,
     borderRadius: borderRadius.md,
@@ -432,7 +446,7 @@ const styles = StyleSheet.create({
   infoText: {
     flex: 1,
     ...typography.caption,
-    color: colors.primary,
+    color: theme.primary,
     lineHeight: 18,
   },
   loadingContainer: {
@@ -442,6 +456,6 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
   },
 });

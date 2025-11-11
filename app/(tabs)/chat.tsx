@@ -1,15 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MessageCircle, ChevronLeft } from 'lucide-react-native';
 import { router } from 'expo-router';
-import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
+import { spacing, borderRadius, typography, shadows } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useChat } from '@/contexts/ChatContext';
 import type { ConversationWithDetails } from '@/types/chat';
+import { NotificationItemSkeleton } from '@/components/ui/Skeleton';
 
 export default function ChatScreen() {
   const { conversations, unreadCount, loading, refreshConversations } = useChat();
   const [refreshing, setRefreshing] = useState(false);
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -75,14 +79,14 @@ export default function ChatScreen() {
           </View>
         </View>
 
-        <ChevronLeft size={20} color={colors.textLight} />
+        <ChevronLeft size={20} color={theme.textLight} />
       </TouchableOpacity>
     );
   };
 
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
-      <MessageCircle size={64} color={colors.textLight} />
+      <MessageCircle size={64} color={theme.textLight} />
       <Text style={styles.emptyTitle}>لا توجد محادثات</Text>
       <Text style={styles.emptyText}>
         ستظهر محادثاتك مع التجار والسائقين هنا
@@ -94,7 +98,7 @@ export default function ChatScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <View style={styles.headerContent}>
-          <MessageCircle size={24} color={colors.text} />
+          <MessageCircle size={24} color={theme.text} />
           <Text style={styles.headerTitle}>المحادثات</Text>
           {unreadCount > 0 && (
             <View style={styles.headerBadge}>
@@ -104,24 +108,34 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      <FlatList
-        data={conversations}
-        renderItem={renderConversationItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={[
-          styles.listContent,
-          conversations.length === 0 && styles.emptyListContent,
-        ]}
-        ListEmptyComponent={renderEmptyState}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            tintColor={colors.primary}
-          />
-        }
-        showsVerticalScrollIndicator={false}
-      />
+      {loading ? (
+        <View style={{ padding: spacing.md }}>
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+        </View>
+      ) : (
+        <FlatList
+          data={conversations}
+          renderItem={renderConversationItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={[
+            styles.listContent,
+            conversations.length === 0 && styles.emptyListContent,
+          ]}
+          ListEmptyComponent={renderEmptyState}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={theme.primary}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -145,17 +159,17 @@ function formatTime(dateString: string): string {
   });
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   headerContent: {
     flexDirection: 'row',
@@ -164,11 +178,11 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     ...typography.h2,
-    color: colors.text,
+    color: theme.text,
     flex: 1,
   },
   headerBadge: {
-    backgroundColor: colors.error,
+    backgroundColor: theme.error,
     borderRadius: 12,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -176,7 +190,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerBadgeText: {
-    color: colors.white,
+    color: theme.white,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -190,7 +204,7 @@ const styles = StyleSheet.create({
   conversationItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     borderRadius: borderRadius.lg,
     padding: spacing.md,
     marginBottom: spacing.sm,
@@ -212,14 +226,14 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
     fontSize: 24,
     fontWeight: '600',
-    color: colors.white,
+    color: theme.white,
   },
   onlineBadge: {
     position: 'absolute',
@@ -228,9 +242,9 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: colors.success,
+    backgroundColor: theme.success,
     borderWidth: 2,
-    borderColor: colors.white,
+    borderColor: theme.white,
   },
   conversationContent: {
     flex: 1,
@@ -243,12 +257,12 @@ const styles = StyleSheet.create({
   },
   conversationName: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     flex: 1,
   },
   conversationTime: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   conversationFooter: {
     flexDirection: 'row',
@@ -257,15 +271,15 @@ const styles = StyleSheet.create({
   },
   lastMessage: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     flex: 1,
   },
   unreadText: {
-    color: colors.primary,
+    color: theme.primary,
     fontWeight: '600',
   },
   unreadBadge: {
-    backgroundColor: colors.primary,
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -273,7 +287,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   unreadBadgeText: {
-    color: colors.white,
+    color: theme.white,
     fontSize: 11,
     fontWeight: '600',
   },
@@ -285,13 +299,13 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     marginTop: spacing.md,
     marginBottom: spacing.xs,
   },
   emptyText: {
     ...typography.body,
-    color: colors.textLight,
+    color: theme.textLight,
     textAlign: 'center',
   },
 });

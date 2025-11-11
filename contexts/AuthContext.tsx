@@ -88,14 +88,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (e) {
         console.log('Cache write error:', e);
       }
-      // لا تغيّر نوع المستخدم تلقائياً هنا — سيتم تحديده بعد التحقق من حالة الموافقة
+
+      // تعزيز كشف نوع المستخدم: حدّث من metadata أو ملفات الدور إن كان current 'customer' أو فارغ
+      const normalizedCurrent = (current.user_type || 'customer') as UserType;
+      if (!['merchant', 'driver', 'admin'].includes(normalizedCurrent)) {
+        let detectedRole: UserType | null = null;
+
+        // 1) من metadata إن توفّر
+        const metaRole = (user?.user_metadata as any)?.role as UserType | undefined;
+        if (metaRole && ['merchant', 'driver', 'admin'].includes(metaRole)) {
+          detectedRole = metaRole;
+        }
+
+        try {
+          // 2) تحقّق من وجود ملفات تعريف السائق/التاجر
+          const [{ data: dprof }, { data: mprof }, { data: merch }] = await Promise.all([
+            supabase.from('driver_profiles').select('id').eq('id', userId).maybeSingle(),
+            supabase.from('merchant_profiles').select('id').eq('owner_id', userId).maybeSingle(),
+            supabase.from('merchants').select('id').eq('owner_id', userId).limit(1).maybeSingle(),
+          ]);
+
+          if (!detectedRole) {
+            if (dprof) detectedRole = 'driver';
+            else if (mprof || merch) detectedRole = 'merchant';
+          }
+        } catch (e) {
+          console.log('Role detection error:', e);
+        }
+
+        if (detectedRole && detectedRole !== current.user_type) {
+          // تحديث محلي فوري لمنع re-fetch
+          current = { ...current, user_type: detectedRole };
+          // تحديث cache
+          await AsyncStorage.setItem(`profile_${userId}`, JSON.stringify(current));
+          // مزامنة في الخلفية
+          supabase
+            .from('profiles')
+            .update({ user_type: detectedRole, updated_at: new Date().toISOString() })
+            .eq('id', userId)
+            .then(() => console.log(`✅ Profile user_type synced to ${detectedRole}`));
+        }
+      }
       setProfile(current);
     }
 
     // تحقق من حالات انتظار الموافقة على مستوى السائق/التاجر
     setApprovalChecked(false);
     try {
-      const [{ data: dp }, { data: mp }, { data: ms }] = await Promise.all([
+      // ملاحظة مهمة: الموافقة التي تمنع دخول التطبيق يجب أن تكون على حساب المستخدم (driver/merchant profile)
+      // وليس على المتاجر (merchants). حالة المتجر قد تكون قيد المراجعة لكن لا يجب أن تمنع دخول التطبيق.
+      const [{ data: dp }, { data: mp }] = await Promise.all([
         supabase
           .from('driver_profiles')
           .select('approval_status')
@@ -106,57 +148,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .select('approval_status')
           .eq('owner_id', userId)
           .maybeSingle(),
-        supabase
-          .from('merchants')
-          .select('approval_status')
-          .eq('owner_id', userId),
       ]);
-      const msList = (ms || []) as Array<{ approval_status: string }>;
-      const merchPending = msList.some((m) => m.approval_status === 'pending');
-      const merchRejected = msList.some((m) => m.approval_status === 'rejected');
-      const isPending = (dp?.approval_status === 'pending') || (mp?.approval_status === 'pending') || merchPending;
-      const isRejected = (dp?.approval_status === 'rejected') || (mp?.approval_status === 'rejected') || merchRejected;
-      console.log('[Auth] approvals', {
-        dp: dp?.approval_status,
-        mp: mp?.approval_status,
-        ms_count: msList.length,
-        isPending,
-        isRejected,
-        currentUserType: current?.user_type,
-      });
+      const isPending = (dp?.approval_status === 'pending') || (mp?.approval_status === 'pending');
+      const isRejected = (dp?.approval_status === 'rejected') || (mp?.approval_status === 'rejected');
       setApprovalPending(!!(isPending || isRejected));
       setApprovalChecked(true);
-
-      // بعد اكتمال فحص الموافقة: قم برفع نوع المستخدم تلقائياً إذا كان معتمداً
-      try {
-        if (current && current.user_type === 'customer') {
-          const msApproved = msList.some((m) => m.approval_status === 'approved');
-          let newType: UserType | null = null;
-          if (mp?.approval_status === 'approved' || msApproved) {
-            newType = 'merchant';
-          } else if (dp?.approval_status === 'approved') {
-            newType = 'driver';
-          }
-
-          if (newType) {
-            console.log('[Auth] auto role upgrade', { from: current.user_type, to: newType });
-            const updated = { ...current, user_type: newType } as Profile;
-            setProfile(updated);
-            try {
-              await AsyncStorage.setItem(`profile_${userId}`, JSON.stringify(updated));
-            } catch (e) {
-              console.log('Cache write error:', e);
-            }
-            supabase
-              .from('profiles')
-              .update({ user_type: newType, updated_at: new Date().toISOString() })
-              .eq('id', userId)
-              .then(() => console.log(`✅ Profile user_type synced to ${newType}`));
-          }
-        }
-      } catch (e) {
-        console.log('Auto role upgrade error:', e);
-      }
     } catch (e) {
       console.log('Approval status check error:', e);
       setApprovalPending(false);

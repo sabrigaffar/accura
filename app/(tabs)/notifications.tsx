@@ -16,6 +16,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, Check, CheckCheck, Trash2, X } from 'lucide-react-native';
 import { useNotifications } from '@/contexts/NotificationContext';
 import type { Notification } from '@/types/notification';
+import * as Haptics from 'expo-haptics';
+import { NotificationItemSkeleton } from '@/components/ui/Skeleton';
+import { useToast } from '@/contexts/ToastContext';
 
 export default function NotificationsScreen() {
   const {
@@ -29,6 +32,7 @@ export default function NotificationsScreen() {
   } = useNotifications();
 
   const [refreshing, setRefreshing] = useState(false);
+  const { success: showToastSuccess, info: showToastInfo } = useToast();
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -44,7 +48,11 @@ export default function NotificationsScreen() {
         { text: 'إلغاء', style: 'cancel' },
         {
           text: 'نعم',
-          onPress: markAllAsRead,
+          onPress: async () => {
+            await markAllAsRead();
+            try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+            showToastSuccess('تم وضع علامة مقروء على جميع الإشعارات');
+          },
         },
       ]
     );
@@ -59,7 +67,11 @@ export default function NotificationsScreen() {
         {
           text: 'حذف',
           style: 'destructive',
-          onPress: () => deleteNotification(notificationId),
+          onPress: async () => {
+            await deleteNotification(notificationId);
+            try { Haptics.selectionAsync(); } catch {}
+            showToastInfo('تم حذف الإشعار');
+          },
         },
       ]
     );
@@ -140,6 +152,21 @@ export default function NotificationsScreen() {
       <Text style={styles.emptyText}>سنخبرك عندما يحدث شيء جديد</Text>
     </View>
   );
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={{ padding: 16 }}>
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+          <NotificationItemSkeleton />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

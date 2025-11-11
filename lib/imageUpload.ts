@@ -176,3 +176,63 @@ export async function getKycSignedUrl(path: string, expiresInSeconds = 3600): Pr
     return null;
   }
 }
+
+// ======================================
+// Generic uploads to any Storage bucket
+// ======================================
+
+/**
+ * Upload any file (image/PDF/...) to a public bucket and return its public URL.
+ * If the bucket is private, you can still upload but you'll need to create a signed URL to view.
+ */
+export async function uploadToBucket(
+  fileUri: string,
+  bucketId: string,
+  keyPrefix: string = '',
+  opts?: { forceExt?: string; contentTypeOverride?: string }
+): Promise<string | null> {
+  try {
+    const response = await fetch(fileUri);
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = new Uint8Array(arrayBuffer);
+
+    const lower = (fileUri || '').toLowerCase();
+    let ext = opts?.forceExt || 'bin';
+    if (!opts?.forceExt) {
+      if (lower.includes('.png')) ext = 'png';
+      else if (lower.includes('.jpg')) ext = 'jpg';
+      else if (lower.includes('.jpeg')) ext = 'jpeg';
+      else if (lower.includes('.webp')) ext = 'webp';
+      else if (lower.includes('.pdf')) ext = 'pdf';
+    }
+
+    let contentType = opts?.contentTypeOverride || 'application/octet-stream';
+    if (!opts?.contentTypeOverride) {
+      if (ext === 'pdf') contentType = 'application/pdf';
+      else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) contentType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+    }
+
+    const prefix = keyPrefix ? `${keyPrefix.replace(/\/$/, '')}/` : '';
+    const fileName = `${prefix}${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+
+    const { error: upErr } = await supabase.storage
+      .from(bucketId)
+      .upload(fileName, buffer, {
+        contentType,
+        cacheControl: '3600',
+        upsert: false,
+      });
+    if (upErr) {
+      console.error('uploadToBucket error:', upErr);
+      return null;
+    }
+
+    const { data: pub } = supabase.storage
+      .from(bucketId)
+      .getPublicUrl(fileName);
+    return pub.publicUrl;
+  } catch (e) {
+    console.error('uploadToBucket processing error:', e);
+    return null;
+  }
+}

@@ -81,6 +81,8 @@ const SettingsPage: React.FC = () => {
   const [ps, setPs] = useState({
     service_fee_flat: 2.5,
     driver_commission_per_km: 1,
+    base_fee_per_km: 10,
+    driver_min_balance_to_accept: 50,
     driver_commission_free_until: null as string | null,
     merchant_commission_rate: 0,
     merchant_commission_flat: 0,
@@ -106,6 +108,8 @@ const SettingsPage: React.FC = () => {
         setPs({
           service_fee_flat: Number(data.service_fee_flat ?? 2.5),
           driver_commission_per_km: Number(data.driver_commission_per_km ?? 1),
+          base_fee_per_km: Number(data.base_fee_per_km ?? 10),
+          driver_min_balance_to_accept: Number(data.driver_min_balance_to_accept ?? 50),
           driver_commission_free_until: data.driver_commission_free_until,
           merchant_commission_rate: Number(data.merchant_commission_rate ?? 0),
           merchant_commission_flat: Number(data.merchant_commission_flat ?? 0),
@@ -151,6 +155,8 @@ const SettingsPage: React.FC = () => {
         id: 1,
         service_fee_flat: ps.service_fee_flat,
         driver_commission_per_km: ps.driver_commission_per_km,
+        base_fee_per_km: ps.base_fee_per_km,
+        driver_min_balance_to_accept: ps.driver_min_balance_to_accept,
         driver_commission_free_until: ps.driver_commission_free_until,
         merchant_commission_rate: ps.merchant_commission_rate,
         merchant_commission_flat: ps.merchant_commission_flat,
@@ -371,6 +377,28 @@ const SettingsPage: React.FC = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
                   value={ps.driver_commission_per_km}
                   onChange={(e) => setPs({ ...ps, driver_commission_per_km: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">سعر التوصيل الأساسي لكل كم ({ps.currency})</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.base_fee_per_km}
+                  onChange={(e) => setPs({ ...ps, base_fee_per_km: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">الحد الأدنى لرصيد السائق للقبول ({ps.currency})</label>
+                <input
+                  type="number"
+                  step="1"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary focus:border-primary"
+                  value={ps.driver_min_balance_to_accept}
+                  onChange={(e) => setPs({ ...ps, driver_min_balance_to_accept: Number(e.target.value) })}
                 />
               </div>
 

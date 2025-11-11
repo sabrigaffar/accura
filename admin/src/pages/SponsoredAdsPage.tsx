@@ -302,18 +302,17 @@ export default function SponsoredAdsPage() {
       });
 
       if (error) throw error;
-      
-      alert('✅ تمت الموافقة على الإعلان بنجاح');
+      pushToast('✅ تمت الموافقة على الإعلان بنجاح', 'success');
       fetchAds();
     } catch (error: any) {
-      alert('خطأ: ' + error.message);
+      pushToast('خطأ: ' + error.message, 'error');
     }
   };
 
   const handleReject = async (adId: string) => {
     const reason = prompt('الرجاء إدخال سبب الرفض:');
     if (!reason || reason.trim() === '') {
-      alert('يجب إدخال سبب الرفض');
+      pushToast('يجب إدخال سبب الرفض', 'error');
       return;
     }
 
@@ -325,11 +324,10 @@ export default function SponsoredAdsPage() {
       });
 
       if (error) throw error;
-      
-      alert('✅ تم رفض الإعلان واسترجاع المبلغ');
+      pushToast('✅ تم رفض الإعلان واسترجاع المبلغ', 'success');
       fetchAds();
     } catch (error: any) {
-      alert('خطأ: ' + error.message);
+      pushToast('خطأ: ' + error.message, 'error');
     }
   };
 
@@ -368,10 +366,9 @@ export default function SponsoredAdsPage() {
       } catch (e) {
         console.warn('Failed to log admin activity for ad settings update', e);
       }
-      
-      alert('✅ تم حفظ الإعدادات بنجاح');
+      pushToast('✅ تم حفظ الإعدادات بنجاح', 'success');
     } catch (error: any) {
-      alert('خطأ: ' + error.message);
+      pushToast('خطأ: ' + error.message, 'error');
     }
   };
 

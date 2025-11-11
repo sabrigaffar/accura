@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, Mail, Smartphone, Package, Tag } from 'lucide-react-native';
-import { colors, spacing, borderRadius, typography } from '@/constants/theme';
+import { spacing, borderRadius, typography } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function NotificationsScreen() {
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [notifications, setNotifications] = useState({
     push: true,
     email: false,
@@ -76,16 +79,16 @@ export default function NotificationsScreen() {
           <View style={styles.channelContainer}>
             <View style={styles.channelItem}>
               <View style={styles.channelInfo}>
-                <Smartphone size={20} color={colors.primary} />
+                <Smartphone size={20} color={theme.primary} />
                 <View style={styles.channelText}>
                   <Text style={styles.channelTitle}>الإشعارات الفورية</Text>
                   <Text style={styles.channelDescription}>إرسال إشعارات إلى جوالك</Text>
                 </View>
               </View>
               <Switch
-                trackColor={{ false: colors.border, true: colors.primary + '40' }}
-                thumbColor={notifications.push ? colors.primary : colors.white}
-                ios_backgroundColor={colors.border}
+                trackColor={{ false: theme.border, true: theme.primary + '40' }}
+                thumbColor={notifications.push ? theme.primary : theme.white}
+                ios_backgroundColor={theme.border}
                 onValueChange={() => toggleNotification('push')}
                 value={notifications.push}
               />
@@ -93,16 +96,16 @@ export default function NotificationsScreen() {
 
             <View style={styles.channelItem}>
               <View style={styles.channelInfo}>
-                <Mail size={20} color={colors.primary} />
+                <Mail size={20} color={theme.primary} />
                 <View style={styles.channelText}>
                   <Text style={styles.channelTitle}>البريد الإلكتروني</Text>
                   <Text style={styles.channelDescription}>إرسال تحديثات عبر البريد</Text>
                 </View>
               </View>
               <Switch
-                trackColor={{ false: colors.border, true: colors.primary + '40' }}
-                thumbColor={notifications.email ? colors.primary : colors.white}
-                ios_backgroundColor={colors.border}
+                trackColor={{ false: theme.border, true: theme.primary + '40' }}
+                thumbColor={notifications.email ? theme.primary : theme.white}
+                ios_backgroundColor={theme.border}
                 onValueChange={() => toggleNotification('email')}
                 value={notifications.email}
               />
@@ -117,16 +120,16 @@ export default function NotificationsScreen() {
             return (
               <TouchableOpacity key={setting.id} style={styles.settingItem}>
                 <View style={styles.settingInfo}>
-                  <Icon size={20} color={colors.primary} />
+                  <Icon size={20} color={theme.primary} />
                   <View style={styles.settingText}>
                     <Text style={styles.settingTitle}>{setting.title}</Text>
                     <Text style={styles.settingDescription}>{setting.description}</Text>
                   </View>
                 </View>
                 <Switch
-                  trackColor={{ false: colors.border, true: colors.primary + '40' }}
-                  thumbColor={colors.primary}
-                  ios_backgroundColor={colors.border}
+                  trackColor={{ false: theme.border, true: theme.primary + '40' }}
+                  thumbColor={theme.primary}
+                  ios_backgroundColor={theme.border}
                   value={true}
                 />
               </TouchableOpacity>
@@ -138,33 +141,33 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   headerTitle: {
     ...typography.h2,
-    color: colors.text,
+    color: theme.text,
     textAlign: 'center',
   },
   content: {
     flex: 1,
   },
   section: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     marginBottom: spacing.md,
   },
   sectionTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
     padding: spacing.md,
     paddingBottom: spacing.sm,
   },
@@ -178,7 +181,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   channelInfo: {
     flexDirection: 'row',
@@ -189,12 +192,12 @@ const styles = StyleSheet.create({
   },
   channelTitle: {
     ...typography.body,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.xs,
   },
   channelDescription: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   settingItem: {
     flexDirection: 'row',
@@ -202,7 +205,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   settingInfo: {
     flexDirection: 'row',
@@ -213,11 +216,11 @@ const styles = StyleSheet.create({
   },
   settingTitle: {
     ...typography.body,
-    color: colors.text,
+    color: theme.text,
     marginBottom: spacing.xs,
   },
   settingDescription: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
 });

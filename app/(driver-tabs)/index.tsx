@@ -671,6 +671,23 @@ export default function DriverAvailableOrders() {
       return;
     }
 
+    // ✅ فحص مبكر لرصيد المحفظة المتاح قبل عرض نافذة التأكيد
+    try {
+      const { data: canData, error: canErr } = await supabase.rpc('driver_can_accept', { p_min: null as any });
+      if (canErr) {
+        console.warn('[driver_can_accept] pre-check error:', canErr);
+      } else {
+        const allowed = Array.isArray(canData) ? canData[0]?.allowed : (canData as any)?.allowed;
+        const msg = Array.isArray(canData) ? (canData[0]?.message ?? '') : ((canData as any)?.message ?? '');
+        if (allowed === false) {
+          Alert.alert('⚠️ تنبيه', msg || 'رصيد محفظتك لا يسمح بقبول الطلب حالياً.');
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('[driver_can_accept] pre-check exception:', e);
+    }
+
     Alert.alert(
       'تأكيد قبول الطلب',
       'هل تريد قبول هذا الطلب؟',

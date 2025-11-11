@@ -20,8 +20,9 @@ export default function MerchantProfile() {
           text: 'تسجيل الخروج',
           style: 'destructive',
           onPress: async () => {
-            await signOut();
             router.replace('/auth');
+            // نفّذ تسجيل الخروج مباشرة بعد الانتقال لتجنب أي وميض واجهات
+            setTimeout(() => { signOut(); }, 0);
           }
         }
       ]

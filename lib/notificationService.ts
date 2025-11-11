@@ -18,8 +18,8 @@ import type {
 // إعدادات الإشعارات الافتراضية
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    // shouldShowAlert is deprecated; use the following flags instead
-    shouldPlaySound: true,
+    // نعتمد على تشغيل الصوت المخصص في PushNotificationContext
+    shouldPlaySound: false,
     shouldSetBadge: true,
     shouldShowBanner: true,
     shouldShowList: true,
@@ -61,8 +61,9 @@ class NotificationService {
       }
 
       // الحصول على Push Token من Expo
+      const projectId = (process.env.EXPO_PUBLIC_PROJECT_ID as string) || (Constants as any)?.easConfig?.projectId;
       const token = await Notifications.getExpoPushTokenAsync({
-        projectId: 'c3c8154e-50ce-44a1-b32a-37328206b4a7',
+        projectId,
       });
 
       this.expoPushToken = token.data;
@@ -74,6 +75,7 @@ class NotificationService {
           importance: Notifications.AndroidImportance.MAX,
           vibrationPattern: [0, 250, 250, 250],
           lightColor: '#FF231F7C',
+          sound: 'notification',
         });
       }
 

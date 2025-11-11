@@ -10,13 +10,17 @@ import {
   ActivityIndicator,
   Image,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
-import { ShoppingBag, MapPin, Clock, Upload, Image as ImageIcon, Phone } from 'lucide-react-native';
+import { ShoppingBag, MapPin, Clock, Upload, Image as ImageIcon, Phone, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadSingleImage, uploadToKyc } from '@/lib/imageUpload';
+import { uploadSingleImage, uploadToKyc, uploadToBucket } from '@/lib/imageUpload';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
+// @ts-ignore - added dynamically, ensure to install: expo install react-native-webview
+import { WebView } from 'react-native-webview';
 
 // أنواع الفئات المتاحة للتاجر
 const MERCHANT_CATEGORIES = [
@@ -28,7 +32,7 @@ const MERCHANT_CATEGORIES = [
 ];
 
 export default function SetupMerchantScreen() {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, updateUserType } = useAuth();
   const [merchantName, setMerchantName] = useState('');
   const [merchantDescription, setMerchantDescription] = useState('');
   const [category, setCategory] = useState('');
@@ -39,15 +43,28 @@ export default function SetupMerchantScreen() {
   const [bannerUri, setBannerUri] = useState<string | null>(null);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
+  const [menuImageUris, setMenuImageUris] = useState<string[]>([]);
+  const [menuPdfUri, setMenuPdfUri] = useState<string | null>(null);
+  const [menuLinkInput, setMenuLinkInput] = useState<string>('');
+  const [uploadingMenu, setUploadingMenu] = useState(false);
   // KYC أصبح في خطوة منفصلة أثناء التسجيل (auth/kyc-merchant)
   const [idDocumentUri, setIdDocumentUri] = useState<string | null>(null);
   const [commercialRecordUri, setCommercialRecordUri] = useState<string | null>(null);
   const [uploadingKyc, setUploadingKyc] = useState(false);
+  // إعداد نسبة الضريبة للمتجر
+  const [taxRatePercent, setTaxRatePercent] = useState<string>('0');
+
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
 
   const pickImage = async (type: 'logo' | 'banner') => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsEditing: true,
         aspect: type === 'logo' ? [1, 1] : [16, 9],
         quality: 0.8,
@@ -63,6 +80,60 @@ export default function SetupMerchantScreen() {
     } catch (error) {
       console.error('Error picking image:', error);
       Alert.alert('خطأ', 'فشل في اختيار الصورة');
+    }
+  };
+
+  const pickMenuPdf = async () => {
+    try {
+      // @ts-ignore - dynamic import until package installed: expo install expo-document-picker
+      const DocumentPicker = await import('expo-document-picker');
+      const res = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', multiple: false });
+      if (!res.canceled && res.assets && res.assets[0]?.uri) {
+        setMenuPdfUri(res.assets[0].uri);
+      }
+    } catch (e) {
+      console.error('pickMenuPdf error:', e);
+      Alert.alert('تنبيه', 'يرجى تثبيت expo-document-picker لاختيار ملفات PDF');
+    }
+  };
+
+  const pickMenu = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: getMediaTypesImages(),
+        allowsMultipleSelection: true,
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets?.length) {
+        const newUris = result.assets.map(a => a.uri).filter(Boolean) as string[];
+        setMenuImageUris(prev => [...prev, ...newUris]);
+      }
+    } catch (error) {
+      console.error('Error picking menu:', error);
+      Alert.alert('خطأ', 'فشل في اختيار ملف المنيو');
+    }
+  };
+
+  const removeMenuImage = (idx: number) => {
+    setMenuImageUris(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleAddMenuLink = () => {
+    const url = (menuLinkInput || '').trim();
+    if (!url) return;
+    if (/^https?:\/\//i.test(url)) {
+      if (/\.pdf($|\?)/i.test(url)) {
+        setMenuPdfUri(url);
+      } else if (/\.(png|jpe?g|webp|gif)$/i.test(url)) {
+        setMenuImageUris(prev => [...prev, url]);
+      } else {
+        Alert.alert('تنبيه', 'الرابط ليس صورة أو PDF معروف');
+        return;
+      }
+      setMenuLinkInput('');
+    } else {
+      Alert.alert('تنبيه', 'الرجاء إدخال رابط يبدأ بـ http أو https');
     }
   };
 
@@ -88,6 +159,13 @@ export default function SetupMerchantScreen() {
       return;
     }
 
+    // تحقق من نسبة الضريبة [0..100]
+    const taxNum = Number(taxRatePercent);
+    if (Number.isNaN(taxNum) || taxNum < 0 || taxNum > 100) {
+      Alert.alert('تنبيه', 'الرجاء إدخال نسبة ضريبة بين 0 و 100');
+      return;
+    }
+
     // KYC يُطلب عند التسجيل فقط، لا تشترط مستندات هنا
 
     setLoading(true);
@@ -98,6 +176,7 @@ export default function SetupMerchantScreen() {
       let bannerUrl = null;
       let idDocPath: string | null = null;
       let crDocPath: string | null = null;
+      let menuUrl: string | null = null;
 
       if (logoUri) {
         setUploadingLogo(true);
@@ -113,6 +192,48 @@ export default function SetupMerchantScreen() {
 
       // لا ترفع مستندات KYC هنا؛ تمت معالجتها في auth/kyc-merchant
 
+      // رفع ملفات المنيو (PDF وصور متعددة) إلى bucket عام merchant-menus
+      let uploadedMenuImageUrls: string[] = [];
+      try {
+        setUploadingMenu(true);
+        const prefix = user?.id ? `merchants/${user.id}` : 'merchants/unknown';
+        // PDF
+        if (menuPdfUri) {
+          if (/^https?:\/\//i.test(menuPdfUri)) {
+            menuUrl = menuPdfUri;
+          } else {
+            menuUrl = await uploadToBucket(menuPdfUri, 'merchant-menus', prefix, { forceExt: 'pdf', contentTypeOverride: 'application/pdf' });
+          }
+        }
+        // صور متعددة
+        if (menuImageUris.length > 0) {
+          for (const uri of menuImageUris) {
+            if (/^https?:\/\//i.test(uri)) {
+              uploadedMenuImageUrls.push(uri);
+            } else {
+              const url = await uploadToBucket(uri, 'merchant-menus', prefix);
+              if (url) uploadedMenuImageUrls.push(url);
+            }
+          }
+        }
+      } finally {
+        setUploadingMenu(false);
+      }
+
+      // محاولة التقاط إحداثيات الموقع الحالي تلقائياً
+      let lat: number | null = null;
+      let lng: number | null = null;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === Location.PermissionStatus.GRANTED) {
+          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          lat = pos.coords.latitude;
+          lng = pos.coords.longitude;
+        }
+      } catch (e) {
+        console.log('Skip auto location on setup-merchant:', e);
+      }
+
       // إنشاء سجل في جدول merchants
       const { data, error } = await supabase
         .from('merchants')
@@ -125,7 +246,12 @@ export default function SetupMerchantScreen() {
           phone_number: phoneNumber,
           logo_url: logoUrl,
           banner_url: bannerUrl,
-          is_active: false, // يفعّل بعد موافقة الإدارة
+          is_active: true, // مفعّل مباشرةً كما هو مطلوب
+          approval_status: 'approved', // لا يحتاج موافقة مدير للمتجر
+          latitude: lat,
+          longitude: lng,
+          menu_url: menuUrl,
+          tax_rate_percent: Math.max(0, Math.min(100, Number(taxRatePercent) || 0)),
           // لا ترسل حقول KYC هنا
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -137,37 +263,25 @@ export default function SetupMerchantScreen() {
         throw error;
       }
 
-      // تحديث نوع المستخدم في ملف التعريف
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .update({
-          user_type: 'merchant',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', user?.id);
-
-      if (profileError) {
-        throw profileError;
+      // إدراج صور المنيو في جدول merchant_menu_images (إن وجدت)
+      if (data?.id && uploadedMenuImageUrls.length > 0) {
+        const rows = uploadedMenuImageUrls.map((url, i) => ({ merchant_id: data.id, image_url: url, sort_order: i }));
+        const { error: miErr } = await supabase.from('merchant_menu_images').insert(rows);
+        if (miErr) {
+          console.warn('Failed to insert menu images:', miErr);
+        }
       }
 
-      // تحديث AuthContext ليعكس user_type الجديد
-      await refreshProfile();
+      // عكس نوع المستخدم فوراً في الحالة المحلية قبل الانتقال
+      const { error: utErr } = await updateUserType('merchant');
+      if (utErr) {
+        console.log('updateUserType error (non-fatal):', utErr);
+      }
+      // لا داعي لإعادة جلب الملف الآن لتجنب شاشات تحميل إضافية؛ سيتم تحميل البيانات عند فتح لوحة التاجر
 
       setLoading(false);
-      Alert.alert(
-        'تم استلام طلبك',
-        'تم إرسال مستندات المتجر لمراجعة الإدارة. سنخبرك فور الموافقة.',
-        [
-          {
-            text: 'متابعة',
-            onPress: () => {
-              setTimeout(() => {
-                router.replace('/auth/waiting-approval' as any);
-              }, 100);
-            },
-          },
-        ]
-      );
+      try { await AsyncStorage.setItem('merchant_just_created', 'true'); } catch {}
+      router.replace('/(merchant-tabs)' as any);
     } catch (error: any) {
       setLoading(false);
       console.log('Merchant Setup Error:', error);
@@ -176,7 +290,9 @@ export default function SetupMerchantScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <>
+      <Stack.Screen options={{ headerShown: true, title: 'إنشاء متجر', headerBackTitle: 'رجوع' }} />
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <ShoppingBag size={48} color={colors.primary} />
         <Text style={styles.title}>إعداد ملف المتجر</Text>
@@ -210,6 +326,24 @@ export default function SetupMerchantScreen() {
               editable={!loading}
             />
           </View>
+        </View>
+
+        {/* نسبة الضريبة للمتجر */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>نسبة الضريبة (%)</Text>
+          <View style={styles.inputWrapper}>
+            <TextInput
+              style={styles.input}
+              placeholder="0 - 100"
+              value={taxRatePercent}
+              onChangeText={setTaxRatePercent}
+              keyboardType="numeric"
+              editable={!loading}
+            />
+          </View>
+          <Text style={[styles.subtitle, { fontSize: 12, color: colors.textLight }]}>
+            تُطبّق الضريبة على المجموع الفرعي قبل الخصومات. أدخل 0 إذا لا توجد ضريبة.
+          </Text>
         </View>
 
         {/* رفع شعار المتجر (Logo) */}
@@ -262,6 +396,83 @@ export default function SetupMerchantScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* المنيو (اختياري) */}
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>📄 المنيو (اختياري)</Text>
+
+          {/* أزرار اختيار */}
+          <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+            <TouchableOpacity
+              style={[styles.imageUploadButton, { flex: 1 }]}
+              onPress={pickMenu}
+              disabled={loading || uploadingMenu}
+            >
+              <View style={styles.imageUploadPlaceholder}>
+                <Upload size={28} color={colors.textLight} />
+                <Text style={styles.imageUploadText}>اختيار صور متعددة</Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.imageUploadButton, { flex: 1 }]}
+              onPress={pickMenuPdf}
+              disabled={loading || uploadingMenu}
+            >
+              <View style={styles.imageUploadPlaceholder}>
+                <Upload size={28} color={colors.textLight} />
+                <Text style={styles.imageUploadText}>اختيار PDF للمنيو</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          {/* صور المنيو المختارة */}
+          {menuImageUris.length > 0 && (
+            <View style={{ marginTop: spacing.sm, flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+              {menuImageUris.map((uri, idx) => (
+                <View key={uri + idx} style={{ width: 90, height: 90, borderRadius: borderRadius.sm, overflow: 'hidden' }}>
+                  <Image source={{ uri }} style={{ width: '100%', height: '100%' }} />
+                  <TouchableOpacity onPress={() => removeMenuImage(idx)} style={{ position: 'absolute', top: 4, right: 4, backgroundColor: colors.black + '60', borderRadius: 10, padding: 2 }}>
+                    <X size={14} color={colors.white} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* PDF Preview card */}
+          {menuPdfUri && (
+            <View style={{ marginTop: spacing.sm }}>
+              {/^https?:\/\//i.test(menuPdfUri) ? (
+                <View style={{ height: 180, borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md, overflow: 'hidden' }}>
+                  <WebView
+                    source={{ uri: `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(menuPdfUri)}` }}
+                    style={{ flex: 1, backgroundColor: colors.lightGray }}
+                  />
+                </View>
+              ) : (
+                <View style={{ alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md, padding: spacing.md, backgroundColor: colors.lightGray }}>
+                  <Text style={{ ...typography.bodyMedium, color: colors.text }}>ملف PDF محدد</Text>
+                  <Text style={{ ...typography.caption, color: colors.textLight, marginTop: 4 }}>ستظهر المعاينة بعد الحفظ (يجب أن يكون رابطاً عاماً)</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* إضافة رابط صورة أو PDF */}
+          <View style={[styles.inputWrapper, { marginTop: spacing.sm, alignItems: 'center' }]}> 
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              placeholder="أدخل رابط صورة أو PDF"
+              value={menuLinkInput}
+              onChangeText={setMenuLinkInput}
+              editable={!loading}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity onPress={handleAddMenuLink} style={{ paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+              <Text style={{ ...typography.bodyMedium, color: colors.primary }}>إضافة</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         <View style={styles.inputContainer}>
           <Text style={styles.label}>📍 عنوان المتجر</Text>
           <View style={styles.inputWrapper}>
@@ -291,46 +502,8 @@ export default function SetupMerchantScreen() {
               editable={!loading}
             />
           </View>
-        </View>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>فئة المتجر</Text>
-          <View style={styles.categoryContainer}>
-            {MERCHANT_CATEGORIES.map((cat) => (
-              <TouchableOpacity
-                key={cat.key}
-                style={[
-                  styles.categoryButton,
-                  category === cat.key && styles.selectedCategoryButton,
-                ]}
-                onPress={() => setCategory(cat.key)}
-                disabled={loading}
-              >
-                <Text
-                  style={[
-                    styles.categoryText,
-                    category === cat.key && styles.selectedCategoryText,
-                  ]}
-                >
-                  {cat.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>عنوان المتجر</Text>
-          <View style={styles.inputWrapper}>
-            <MapPin size={20} color={colors.textLight} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="عنوان المتجر الكامل"
-              value={address}
-              onChangeText={setAddress}
-              editable={!loading}
-            />
-          </View>
+          
         </View>
 
         <TouchableOpacity
@@ -345,7 +518,8 @@ export default function SetupMerchantScreen() {
           )}
         </TouchableOpacity>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </>
   );
 }
 

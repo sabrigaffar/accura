@@ -18,6 +18,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCustomerRealtimeOrders } from '@/hooks/useRealtimeOrders';
+import * as Haptics from 'expo-haptics';
+import { useToast } from '@/contexts/ToastContext';
+import { OrderCardSkeleton } from '@/components/ui/Skeleton';
 
 interface OrderWithMerchant extends Order {
   merchant?: {
@@ -39,6 +42,7 @@ const ORDER_STATUS_CONFIG = {
 export default function OrdersScreen() {
   const { user } = useAuth();
   const { theme } = useTheme();
+  const { info: showToastInfo } = useToast();
   const [orders, setOrders] = useState<OrderWithMerchant[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -64,11 +68,8 @@ export default function OrdersScreen() {
     user?.id || '',
     (updatedOrder) => {
       console.log('👤 [Customer] Order status changed:', updatedOrder.status);
-      Alert.alert(
-        '📦 تحديث الطلب',
-        `تم تحديث حالة طلبك #${updatedOrder.order_number}`,
-        [{ text: 'حسناً', onPress: () => fetchOrders() }]
-      );
+      try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+      showToastInfo(`تم تحديث حالة طلبك #${updatedOrder.order_number}`);
       fetchOrders();
     }
   );
@@ -224,8 +225,11 @@ export default function OrdersScreen() {
       </View>
 
       {loading && !refreshing ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>جاري التحميل...</Text>
+        <View style={{ padding: spacing.md }}>
+          <OrderCardSkeleton />
+          <OrderCardSkeleton />
+          <OrderCardSkeleton />
+          <OrderCardSkeleton />
         </View>
       ) : orders.length === 0 ? (
         <View style={styles.emptyContainer}>

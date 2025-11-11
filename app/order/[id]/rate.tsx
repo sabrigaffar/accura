@@ -13,10 +13,11 @@ import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
 import { ArrowLeft, Star } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
-import { updateMerchantRating, updateDriverRating } from '@/lib/ratingUtils';
 
 export default function RateOrderScreen() {
   const { id } = useLocalSearchParams(); // order id
+  const orderId = Array.isArray(id) ? id[0] : (id as string);
+
   const { user } = useAuth();
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
@@ -27,6 +28,7 @@ export default function RateOrderScreen() {
   };
 
   const submitRating = async () => {
+
     if (rating === 0) {
       Alert.alert('خطأ', 'الرجاء اختيار تقييم');
       return;
@@ -40,74 +42,34 @@ export default function RateOrderScreen() {
     setSubmitting(true);
 
     try {
-      // الحصول على معلومات الطلب مع معلومات المتجر
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .select(`
-          id,
-          merchant_id,
-          driver_id,
-          merchant:merchants(owner_id)
-        `)
-        .eq('id', id)
-        .single();
-
-      if (orderError) throw orderError;
-      if (!order) throw new Error('Order not found');
-
-      // إدراج التقييم للسائق
-      if (order.driver_id) {
-        const { error: driverReviewError } = await supabase
-          .from('reviews')
-          .insert({
-            order_id: id,
-            reviewer_id: user.id,
-            reviewee_id: order.driver_id,
-            reviewee_type: 'driver',
-            rating: rating,
-            comment: comment.trim(),
-          });
-
-        if (driverReviewError) {
-          console.warn('Could not create driver review:', driverReviewError);
-        } else {
-          // تحديث تقييم السائق
-          await updateDriverRating(order.driver_id);
+      // استخدام RPC آمنة تمنع التكرار وتتحقق من "تم التسليم" وتعين المُقيَّم تلقائياً
+      // تقييم السائق
+      try {
+        const { error: drvErr } = await supabase.rpc('create_review', {
+          p_order_id: orderId,
+          p_reviewee_type: 'driver',
+          p_rating: rating,
+          p_comment: comment.trim() || null,
+        });
+        if (drvErr && !`${drvErr?.message || ''}`.includes('no driver assigned')) {
+          throw drvErr;
+        }
+      } catch (e) {
+        // إذا لم يوجد سائق للطلب نتجاهل هذا التقييم ونكمل بتقييم المتجر
+        const msg = (e as any)?.message || '';
+        if (!msg.includes('no driver assigned')) {
+          throw e;
         }
       }
 
-      // إدراج التقييم للمتجر (باستخدام owner_id)
-      // Handle merchant data which could be an array or object
-      const merchantData = Array.isArray(order.merchant) ? order.merchant[0] : order.merchant;
-      if (merchantData && merchantData.owner_id) {
-        const { error: merchantReviewError } = await supabase
-          .from('reviews')
-          .insert({
-            order_id: id,
-            reviewer_id: user.id,
-            reviewee_id: merchantData.owner_id,
-            reviewee_type: 'merchant',
-            rating: rating,
-            comment: comment.trim(),
-          });
-
-        if (merchantReviewError) {
-          console.warn('Could not create merchant review:', merchantReviewError);
-        } else {
-          // تحديث تقييم المتجر
-          await updateMerchantRating(order.merchant_id);
-        }
-      }
-
-      // تحديث حالة الطلب لتحديد أن التقييم تم
-      const { error: orderUpdateError } = await supabase
-        .from('orders')
-        .update({ rating: rating, review_text: comment.trim() })
-        .eq('id', id);
-
-      if (orderUpdateError) {
-        console.warn('Could not update order rating:', orderUpdateError);
-      }
+      // تقييم المتجر
+      const { error: merErr } = await supabase.rpc('create_review', {
+        p_order_id: orderId,
+        p_reviewee_type: 'merchant',
+        p_rating: rating,
+        p_comment: comment.trim() || null,
+      });
+      if (merErr) throw merErr;
 
       Alert.alert(
         'نجاح',
@@ -119,9 +81,19 @@ export default function RateOrderScreen() {
           },
         ]
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error submitting rating:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء إرسال التقييم');
+      const code = error?.code;
+      const msg: string = (error?.message || '').toString();
+      if (code === '23505' || msg.includes('duplicate')) {
+        Alert.alert('تنبيه', 'لقد قمت بتقييم هذا الطرف مسبقاً لهذا الطلب');
+      } else if (msg.includes('order not delivered')) {
+        Alert.alert('تنبيه', 'لا يمكن التقييم قبل تسليم الطلب');
+      } else if (msg.includes('not your order')) {
+        Alert.alert('تنبيه', 'لا يمكنك تقييم طلب لا يخص حسابك');
+      } else {
+        Alert.alert('خطأ', 'حدث خطأ أثناء إرسال التقييم');
+      }
     } finally {
       setSubmitting(false);
     }

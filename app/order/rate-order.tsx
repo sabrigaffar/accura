@@ -47,40 +47,26 @@ export default function RateOrderScreen() {
     try {
       setSubmitting(true);
 
-      const reviews = [];
-
-      // تقييم السائق
+      // تقييم السائق عبر RPC آمن
       if (driverRating > 0 && params.driverId) {
-        reviews.push({
-          order_id: params.orderId,
-          reviewer_id: user?.id,
-          reviewee_id: params.driverId,
-          reviewee_type: 'driver',
-          rating: driverRating,
-          comment: driverComment.trim() || null,
+        const { error: drvErr } = await supabase.rpc('create_review', {
+          p_order_id: params.orderId,
+          p_reviewee_type: 'driver',
+          p_rating: driverRating,
+          p_comment: driverComment.trim() || null,
         });
+        if (drvErr) throw drvErr;
       }
 
-      // تقييم المتجر
+      // تقييم المتجر عبر RPC آمن
       if (merchantRating > 0 && params.merchantId) {
-        reviews.push({
-          order_id: params.orderId,
-          reviewer_id: user?.id,
-          reviewee_id: params.merchantId,
-          reviewee_type: 'merchant',
-          rating: merchantRating,
-          comment: merchantComment.trim() || null,
+        const { error: merErr } = await supabase.rpc('create_review', {
+          p_order_id: params.orderId,
+          p_reviewee_type: 'merchant',
+          p_rating: merchantRating,
+          p_comment: merchantComment.trim() || null,
         });
-      }
-
-      // إدراج التقييمات
-      const { error } = await supabase.from('reviews').insert(reviews);
-
-      if (error) throw error;
-
-      // تحديث متوسط التقييم
-      if (driverRating > 0 && params.driverId) {
-        await updateDriverRating(params.driverId);
+        if (merErr) throw merErr;
       }
 
       Alert.alert('شكراً لك! 🎉', 'تم إرسال تقييمك بنجاح', [
@@ -89,34 +75,21 @@ export default function RateOrderScreen() {
           onPress: () => router.back(),
         },
       ]);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error submitting review:', error);
-      Alert.alert('خطأ', 'حدث خطأ أثناء إرسال التقييم');
+      const code = error?.code;
+      const msg: string = (error?.message || '').toString();
+      if (code === '23505' || msg.includes('duplicate')) {
+        Alert.alert('تنبيه', 'لقد قمت بتقييم هذا الطرف مسبقاً لهذا الطلب');
+      } else if (msg.includes('order not delivered')) {
+        Alert.alert('تنبيه', 'لا يمكن التقييم قبل تسليم الطلب');
+      } else if (msg.includes('not your order')) {
+        Alert.alert('تنبيه', 'لا يمكنك تقييم طلب لا يخص حسابك');
+      } else {
+        Alert.alert('خطأ', 'حدث خطأ أثناء إرسال التقييم');
+      }
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const updateDriverRating = async (driverId: string) => {
-    try {
-      // حساب متوسط التقييم الجديد
-      const { data: reviews } = await supabase
-        .from('reviews')
-        .select('rating')
-        .eq('reviewee_id', driverId)
-        .eq('reviewee_type', 'driver');
-
-      if (reviews && reviews.length > 0) {
-        const avgRating = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
-        
-        // تحديث driver_profiles
-        await supabase
-          .from('driver_profiles')
-          .update({ average_rating: avgRating.toFixed(1) })
-          .eq('id', driverId);
-      }
-    } catch (error) {
-      console.error('Error updating driver rating:', error);
     }
   };
 

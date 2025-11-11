@@ -22,6 +22,22 @@ const AdminActivityLog: React.FC = () => {
     fetchActivityLog();
   }, [dateFilter]);
 
+  // Live updates via Supabase realtime
+  useEffect(() => {
+    const channel = supabase
+      .channel('admin-activity-log')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_activity_log' }, async (_payload) => {
+        // Re-fetch to apply current filters and joins
+        await fetchActivityLog();
+      })
+      .subscribe();
+
+    return () => {
+      try { supabase.removeChannel(channel); } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFilter]);
+
   const fetchActivityLog = async () => {
     try {
       setLoading(true);
@@ -170,13 +186,9 @@ const AdminActivityLog: React.FC = () => {
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {activity.details && Object.keys(activity.details).length > 0 && (
-                      <div className="max-w-xs truncate">
-                        {Object.entries(activity.details).map(([key, value]) => (
-                          <span key={key} className="mr-2">
-                            {key}: {String(value)}
-                          </span>
-                        ))}
-                      </div>
+                      <pre className="max-w-xs whitespace-pre-wrap text-xs text-gray-700 overflow-x-auto">
+                        {JSON.stringify(activity.details, null, 2)}
+                      </pre>
                     )}
                   </td>
                 </tr>

@@ -554,10 +554,17 @@ export default function MerchantProfileScreen() {
     );
   };
 
+  // Backward/forward compatible mediaTypes for expo-image-picker
+  const getMediaTypesImages = () => {
+    const anyPicker: any = ImagePicker as any;
+    const images = anyPicker.MediaType?.Images ?? anyPicker.MediaTypeOptions?.Images;
+    return anyPicker.MediaType ? [images] : images;
+  };
+
   const pickImage = async (type: 'logo' | 'banner') => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: getMediaTypesImages(),
         allowsEditing: true,
         aspect: type === 'logo' ? [1, 1] : [16, 9],
         quality: 0.8,

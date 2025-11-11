@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -21,8 +21,11 @@ import {
   TrendingUp,
   AlertCircle,
 } from 'lucide-react-native';
-import { colors, spacing, typography, borderRadius } from '@/constants/theme';
+import { spacing, typography, borderRadius } from '@/constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTheme } from '@/contexts/ThemeContext';
+import { useToast } from '@/contexts/ToastContext';
+import * as Haptics from 'expo-haptics';
 
 export default function MerchantSettings() {
   const [settings, setSettings] = useState({
@@ -32,6 +35,9 @@ export default function MerchantSettings() {
     offlineMode: false,
   });
   const [currency, setCurrency] = useState('ريال');
+  const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { success: showToastSuccess, error: showToastError, info: showToastInfo } = useToast();
 
   useEffect(() => {
     (async () => {
@@ -66,7 +72,8 @@ export default function MerchantSettings() {
               
               await Promise.all(keysToRemove.map(key => AsyncStorage.removeItem(key)));
               
-              Alert.alert('✅ تم', 'تم مسح الكاش بنجاح. سيتم تحديث التطبيق.');
+              try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
+              showToastSuccess('تم مسح الكاش بنجاح');
               
               // Reset settings to defaults
               setSettings({
@@ -77,7 +84,8 @@ export default function MerchantSettings() {
               });
               setCurrency('ريال');
             } catch (error) {
-              Alert.alert('خطأ', 'فشل مسح الكاش. حاول مرة أخرى.');
+              try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}
+              showToastError('فشل مسح الكاش. حاول مرة أخرى.');
             }
           },
         },
@@ -193,7 +201,7 @@ export default function MerchantSettings() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <ArrowLeft size={24} color={colors.text} />
+          <ArrowLeft size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>الإعدادات</Text>
         <View style={styles.headerRight} />
@@ -213,7 +221,7 @@ export default function MerchantSettings() {
                 ]}
               >
                 <View style={styles.settingIcon}>
-                  <item.icon size={20} color={colors.primary} />
+                  <item.icon size={20} color={theme.primary} />
                 </View>
                 <View style={styles.settingContent}>
                   <View style={styles.settingTitleRow}>
@@ -229,8 +237,8 @@ export default function MerchantSettings() {
                 <Switch
                   value={settings[item.key]}
                   onValueChange={() => toggleSetting(item.key)}
-                  trackColor={{ false: colors.border, true: colors.primary }}
-                  thumbColor={colors.white}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                  thumbColor={theme.white}
                   disabled={!!item.badge}
                 />
               </View>
@@ -252,13 +260,13 @@ export default function MerchantSettings() {
                 onPress={item.onPress}
               >
                 <View style={styles.settingIcon}>
-                  <item.icon size={20} color={colors.primary} />
+                  <item.icon size={20} color={theme.primary} />
                 </View>
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>{item.title}</Text>
                   <Text style={styles.settingDescription}>{item.description}</Text>
                 </View>
-                <ChevronRight size={20} color={colors.textLight} />
+                <ChevronRight size={20} color={theme.textLight} />
               </TouchableOpacity>
             ))}
           </View>
@@ -278,13 +286,13 @@ export default function MerchantSettings() {
                 onPress={item.onPress}
               >
                 <View style={styles.settingIcon}>
-                  <item.icon size={20} color={colors.primary} />
+                  <item.icon size={20} color={theme.primary} />
                 </View>
                 <View style={styles.settingContent}>
                   <Text style={styles.settingTitle}>{item.title}</Text>
                   <Text style={styles.settingDescription}>{item.description}</Text>
                 </View>
-                <ChevronRight size={20} color={colors.textLight} />
+                <ChevronRight size={20} color={theme.textLight} />
               </TouchableOpacity>
             ))}
           </View>
@@ -294,14 +302,14 @@ export default function MerchantSettings() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>منطقة الخطر</Text>
           <TouchableOpacity style={styles.dangerButton} onPress={handleDeleteAccount}>
-            <Trash2 size={20} color={colors.error} />
+            <Trash2 size={20} color={theme.error} />
             <View style={styles.dangerContent}>
               <Text style={styles.dangerTitle}>حذف الحساب</Text>
               <Text style={styles.dangerDescription}>
                 حذف حسابك بشكل نهائي من التطبيق
               </Text>
             </View>
-            <ChevronRight size={20} color={colors.error} />
+            <ChevronRight size={20} color={theme.error} />
           </TouchableOpacity>
         </View>
 
@@ -314,26 +322,26 @@ export default function MerchantSettings() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: theme.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: spacing.lg,
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   backButton: {
     padding: spacing.xs,
   },
   headerTitle: {
     ...typography.h3,
-    color: colors.text,
+    color: theme.text,
   },
   headerRight: {
     width: 40,
@@ -347,22 +355,22 @@ const styles = StyleSheet.create({
   sectionTitle: {
     ...typography.h3,
     fontSize: 16,
-    color: colors.text,
+    color: theme.text,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.sm,
   },
   card: {
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: colors.border,
+    borderColor: theme.border,
   },
   settingItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: theme.border,
   },
   lastItem: {
     borderBottomWidth: 0,
@@ -371,7 +379,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: colors.primary + '10',
+    backgroundColor: theme.primary + '10',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: spacing.md,
@@ -387,10 +395,10 @@ const styles = StyleSheet.create({
   },
   settingTitle: {
     ...typography.bodyMedium,
-    color: colors.text,
+    color: theme.text,
   },
   badge: {
-    backgroundColor: colors.secondary + '20',
+    backgroundColor: theme.secondary + '20',
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
     borderRadius: borderRadius.sm,
@@ -398,20 +406,20 @@ const styles = StyleSheet.create({
   badgeText: {
     ...typography.caption,
     fontSize: 10,
-    color: colors.secondary,
+    color: theme.secondary,
   },
   settingDescription: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   dangerButton: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: spacing.lg,
-    backgroundColor: colors.white,
+    backgroundColor: theme.white,
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: colors.error + '30',
+    borderColor: theme.error + '30',
   },
   dangerContent: {
     flex: 1,
@@ -419,12 +427,12 @@ const styles = StyleSheet.create({
   },
   dangerTitle: {
     ...typography.bodyMedium,
-    color: colors.error,
+    color: theme.error,
     marginBottom: spacing.xs,
   },
   dangerDescription: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
   versionContainer: {
     alignItems: 'center',
@@ -432,6 +440,6 @@ const styles = StyleSheet.create({
   },
   versionText: {
     ...typography.caption,
-    color: colors.textLight,
+    color: theme.textLight,
   },
 });
