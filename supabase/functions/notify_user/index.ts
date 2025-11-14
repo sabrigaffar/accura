@@ -11,6 +11,8 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 serve(async (req: Request) => {
   try {
     const authHeader = req.headers.get('Authorization');
+    const providedSecret = req.headers.get('x-notify-secret') || req.headers.get('X-Notify-Secret');
+    const REQUIRED_SECRET = Deno.env.get('NOTIFY_WEBHOOK_SECRET') || '';
 
     // Optionally validate the caller is authenticated and (ideally) admin
     let callerIsAdmin = false;
@@ -38,6 +40,12 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: false, error: 'Missing user_id/title/body' }), { status: 400 });
     }
 
+    // Authorization hardening: require admin or valid secret
+    const authorized = (!!REQUIRED_SECRET && providedSecret === REQUIRED_SECRET) || callerIsAdmin;
+    if (!authorized) {
+      return new Response(JSON.stringify({ ok: false, error: 'Forbidden' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+    }
+
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
     // 1) Find active push tokens for the user
@@ -59,29 +67,16 @@ serve(async (req: Request) => {
         title,
         body,
         type: 'system',
-        data: data || {},
+        data: { ...(data || {}), source: 'internal' },
       });
     } catch (e) {
       console.warn('notifications insert warning', e);
     }
 
-    // 3) Send expo push (best-effort)
-    let sent = 0;
-    if (list.length > 0) {
-      const messages = list.map((to: string) => ({ to, title, body, sound: 'default', data: data || {} }));
-      for (let i = 0; i < messages.length; i += 100) {
-        const batch = messages.slice(i, i + 100);
-        const res = await fetch(EXPO_PUSH_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(batch),
-        });
-        if (res.ok) sent += batch.length;
-        else console.error('expo push failed', await res.text());
-      }
-    }
-
-    return new Response(JSON.stringify({ ok: true, sent }), { headers: { 'Content-Type': 'application/json' } });
+    // 3) Do not send from here; rely on DB trigger -> push_queue -> push_worker
+    // The insert above enqueues a job via trigger on public.notifications
+    const sent = 0;
+    return new Response(JSON.stringify({ ok: true, enqueued: true, sent }), { headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
     console.error('notify_user error', e);
     return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: { 'Content-Type': 'application/json' } });

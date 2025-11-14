@@ -62,8 +62,8 @@ export const useRealtimeOrders = ({
 
     // إعداد الاشتراك حسب الدور
     if (role === 'driver') {
-      // السائق: الاستماع للطلبات الجديدة والمتاحة
-      console.log('🚗 [Driver] Setting up real-time subscription...');
+      // السائق: الاستماع لعروض الطلبات الموجّهة إليه بدل بث جميع pending
+      console.log('🚗 [Driver] Setting up targeted real-time subscription (offers)...');
       channel = supabase
         .channel('driver_orders')
         .on(
@@ -71,10 +71,27 @@ export const useRealtimeOrders = ({
           {
             event: 'INSERT',
             schema: 'public',
-            table: 'orders',
-            filter: `status=eq.pending`, // الطلبات المعلقة فقط
+            table: 'driver_order_offers',
+            filter: `driver_id=eq.${userId}`, // عروض موجّهة لهذا السائق فقط
           },
-          handleOrderChange
+          async (payload: any) => {
+            try {
+              const offer = payload?.new;
+              const orderId = offer?.order_id;
+              if (!orderId) return;
+              // جلب تفاصيل الطلب عبر RPC يراعي RLS (لأن السائق لم يُسند بعد)
+              const { data: rows, error } = await supabase
+                .rpc('get_order_for_offer', { p_order_id: orderId });
+              const order = Array.isArray(rows) ? rows[0] : rows;
+              if (error || !order) {
+                console.warn('⚠️ failed to fetch order for offer', error);
+                return;
+              }
+              handleOrderChange({ eventType: 'INSERT', new: order });
+            } catch (e) {
+              console.warn('⚠️ offer handler error', e);
+            }
+          }
         )
         .on(
           'postgres_changes',

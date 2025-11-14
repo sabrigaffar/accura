@@ -105,6 +105,8 @@ export default function ChatScreen() {
             // تحويل الرسالة إلى مقروءة إذا كانت من الطرف الآخر
             if (payload.new.sender_id !== user?.id) {
               markMessageAsRead(payload.new.id);
+              // صَفِّر عدّاد غير المقروءة في صف المشارك الحالي
+              markConversationAsReadRow();
             }
           }
         }
@@ -120,6 +122,21 @@ export default function ChatScreen() {
         .eq('id', messageId);
     } catch (error) {
       console.error('Error marking message as read:', error);
+    }
+  };
+
+  // تأكيد تصفير غير المقروءة في صف المشارك (للتوافق مع ChatContext وشارة الزر العائم)
+  const markConversationAsReadRow = async () => {
+    try {
+      const convId = typeof conversationId === 'string' ? conversationId : undefined;
+      if (!convId || !user?.id) return;
+      await supabase
+        .from('chat_participants')
+        .update({ unread_count: 0, last_read_at: new Date().toISOString() })
+        .eq('conversation_id', convId)
+        .eq('user_id', user.id);
+    } catch (error) {
+      console.error('Error resetting participant unread_count:', error);
     }
   };
 
@@ -170,6 +187,9 @@ export default function ChatScreen() {
         .eq('conversation_id', conversationId)
         .eq('is_read', false)
         .neq('sender_id', user?.id);
+
+      // تصفير غير المقروءة في participants للمستخدم الحالي
+      await markConversationAsReadRow();
     } catch (error) {
       console.error('Error fetching messages:', error);
       try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error); } catch {}

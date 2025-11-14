@@ -15,6 +15,7 @@ import PromotionRulesPage from './pages/PromotionRulesPage';
 import SponsoredAdsPage from './pages/SponsoredAdsPage';
 import ComplaintsPage from './pages/ComplaintsPage';
 import JoinRequestsPage from './pages/JoinRequestsPage';
+import NotificationsLogPage from './pages/NotificationsLogPage';
 
 import NotificationSystem from './components/NotificationSystem';
 import { useAuth } from './contexts/AuthContext';
@@ -43,6 +44,7 @@ function App() {
             <Route path="merchants" element={<MerchantsPage />} />
             <Route path="drivers" element={<DriversPage />} />
             <Route path="reports" element={<ReportsPage />} />
+            <Route path="notifications-log" element={<NotificationsLogPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="wallet" element={<AdminWalletPage />} />
             <Route path="subscriptions" element={<MerchantSubscriptionsPage />} />

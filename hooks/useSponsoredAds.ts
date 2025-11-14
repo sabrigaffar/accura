@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { AppState } from 'react-native';
 import { supabase } from '@/lib/supabase';
 
 interface SponsoredAd {
@@ -40,13 +41,14 @@ export function useSponsoredAds(options: UseSponsoredAdsOptions = {}) {
 
       // 2) In parallel, fetch allowed IDs via direct table select constrained by RLS
       //    This guarantees we never show pending/unapproved ads even if RPC is stale.
+      const nowIso = new Date().toISOString();
       let idsQuery = supabase
         .from('sponsored_ads')
         .select('id')
         .eq('is_active', true)
         .eq('approval_status', 'approved')
-        .lte('start_date', new Date().toISOString())
-        .gte('end_date', new Date().toISOString());
+        .lte('start_date', nowIso)
+        .or(`end_date.is.null,end_date.gte.${nowIso}`);
       if (adType) idsQuery = idsQuery.eq('ad_type', adType);
 
       const [rpcRes, idsRes] = await Promise.all([rpcPromise, idsQuery]);
@@ -60,8 +62,9 @@ export function useSponsoredAds(options: UseSponsoredAdsOptions = {}) {
           .from('sponsored_ads')
           .select('id, merchant_id, ad_type, title, description, image_url, priority, impression_count, click_count')
           .eq('is_active', true)
-          .lte('start_date', new Date().toISOString())
-          .gte('end_date', new Date().toISOString());
+          .eq('approval_status', 'approved')
+          .lte('start_date', nowIso)
+          .or(`end_date.is.null,end_date.gte.${nowIso}`);
         if (adType) base = base.eq('ad_type', adType);
         const { data: adsRows, error: adsErr } = await base.order('priority', { ascending: false }).limit(limit);
         if (adsErr) throw adsErr;
@@ -80,16 +83,38 @@ export function useSponsoredAds(options: UseSponsoredAdsOptions = {}) {
       } else {
         rpcData = (rpcRes.data || []) as SponsoredAd[];
       }
+      let allowedIds: Set<string> | null = null;
       if (idsRes.error) {
-        console.warn('SponsoredAds: RLS ids filter error (failing closed):', idsRes.error.message);
-        setAds([]);
-        return;
+        console.warn('SponsoredAds: RLS ids filter error, relying on RPC only:', idsRes.error.message);
+      } else {
+        allowedIds = new Set<string>((idsRes.data || []).map((r: any) => r.id));
       }
 
-      const allowedIds = new Set<string>((idsRes.data || []).map((r: any) => r.id));
+      // Prefer RPC data; if RPC failed, rpcData contains fallback results.
+      let finalData = allowedIds ? rpcData.filter(ad => allowedIds!.has(ad.id)) : rpcData;
 
-      // Always intersect with allowedIds to fail closed
-      const finalData = rpcData.filter(ad => allowedIds.has(ad.id));
+      // If RPC returned empty but ids query has items, fetch those ads directly (avoid blank UI)
+      if ((finalData.length === 0) && allowedIds && allowedIds.size > 0) {
+        const idList = Array.from(allowedIds);
+        let base2 = supabase
+          .from('sponsored_ads')
+          .select('id, merchant_id, ad_type, title, description, image_url, priority, impression_count, click_count')
+          .in('id', idList)
+          .order('priority', { ascending: false })
+          .limit(limit);
+        const { data: adsRows2, error: adsErr2 } = await base2;
+        if (!adsErr2) {
+          const ids2 = Array.from(new Set((adsRows2 || []).map((r: any) => r.merchant_id)));
+          const { data: merchantsRows2 } = await supabase.from('merchants').select('id, name_ar').in('id', ids2);
+          const nameById2: Record<string, string> = {};
+          (merchantsRows2 || []).forEach((row: any) => { nameById2[row.id] = row.name_ar; });
+          finalData = (adsRows2 || []).map((r: any) => ({
+            ...r,
+            merchant_name: nameById2[r.merchant_id] || '',
+            ctr: r.impression_count > 0 ? Math.round((r.click_count / r.impression_count) * 10000) / 100 : 0,
+          }));
+        }
+      }
       setAds(finalData);
     } catch (err: any) {
       console.error('Error fetching sponsored ads:', err);
@@ -103,11 +128,38 @@ export function useSponsoredAds(options: UseSponsoredAdsOptions = {}) {
   useEffect(() => {
     fetchAds();
 
-    // Auto-refresh every 5 minutes if enabled
+    const cleanups: Array<() => void> = [];
+
+    // Auto-refresh every 2 minutes if enabled
+    let interval: any = null;
     if (autoRefresh) {
-      const interval = setInterval(fetchAds, 5 * 60 * 1000);
-      return () => clearInterval(interval);
+      interval = setInterval(fetchAds, 2 * 60 * 1000);
+      cleanups.push(() => clearInterval(interval));
+
+      // Refresh on app foreground
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') fetchAds();
+      });
+      cleanups.push(() => sub.remove());
+
+      // Realtime updates on sponsored_ads
+      try {
+        const channel = supabase
+          .channel('realtime:sponsored_ads')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'sponsored_ads' }, () => {
+            // Debounce by a tick
+            setTimeout(fetchAds, 50);
+          })
+          .subscribe();
+        cleanups.push(() => {
+          try { supabase.removeChannel(channel); } catch {}
+        });
+      } catch {}
     }
+
+    return () => {
+      cleanups.forEach(fn => fn());
+    };
   }, [adType, limit, autoRefresh]);
 
   // Record impression

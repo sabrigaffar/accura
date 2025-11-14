@@ -371,7 +371,7 @@ export default function SponsoredAdsScreen() {
                   </View>
                   <View style={styles.adStatItem}>
                     <TrendingUp size={14} color={colors.textLight} />
-                    <Text style={styles.adStatText}>{ad.ctr.toFixed(2)}%</Text>
+                    <Text style={styles.adStatText}>{Number(ad.ctr || 0).toFixed(2)}%</Text>
                   </View>
                 </View>
 
@@ -379,7 +379,7 @@ export default function SponsoredAdsScreen() {
                   <View style={styles.budgetInfo}>
                     <Text style={styles.budgetLabel}>الميزانية</Text>
                     <Text style={styles.budgetText}>
-                      {ad.total_spent.toFixed(0)} / {ad.budget_amount.toFixed(0)} ج
+                      {Number(ad.total_spent || 0).toFixed(0)} / {Number(ad.budget_amount || 0).toFixed(0)} ج
                     </Text>
                   </View>
                   <View style={styles.progressBar}>
@@ -387,8 +387,8 @@ export default function SponsoredAdsScreen() {
                       style={[
                         styles.progressFill, 
                         { 
-                          width: `${Math.min((ad.total_spent / ad.budget_amount) * 100, 100)}%`,
-                          backgroundColor: ad.total_spent >= ad.budget_amount ? colors.error : colors.primary,
+                          width: `${Math.min(((Number(ad.budget_amount || 0) > 0) ? (Number(ad.total_spent || 0) / Number(ad.budget_amount || 0)) * 100 : 0), 100)}%`,
+                          backgroundColor: (Number(ad.total_spent || 0) >= Number(ad.budget_amount || 0) && Number(ad.budget_amount || 0) > 0) ? colors.error : colors.primary,
                         }
                       ]} 
                     />
@@ -441,13 +441,13 @@ export default function SponsoredAdsScreen() {
 
           <View style={[styles.statCard, { backgroundColor: '#45B7D1' + '20' }]}>
             <TrendingUp size={24} color="#45B7D1" />
-            <Text style={styles.statValue}>{stats.avgCTR.toFixed(2)}%</Text>
+            <Text style={styles.statValue}>{Number(stats.avgCTR || 0).toFixed(2)}%</Text>
             <Text style={styles.statLabel}>CTR</Text>
           </View>
 
           <View style={[styles.statCard, { backgroundColor: '#FFD700' + '20' }]}>
             <DollarSign size={24} color="#FFD700" />
-            <Text style={styles.statValue}>{stats.totalSpent.toFixed(0)} ج</Text>
+            <Text style={styles.statValue}>{Number(stats.totalSpent || 0).toFixed(0)} ج</Text>
             <Text style={styles.statLabel}>الإنفاق</Text>
           </View>
         </View>
@@ -541,7 +541,7 @@ export default function SponsoredAdsScreen() {
                 </View>
                 <View style={styles.adStatItem}>
                   <TrendingUp size={14} color={colors.textLight} />
-                  <Text style={styles.adStatText}>{ad.ctr.toFixed(2)}%</Text>
+                  <Text style={styles.adStatText}>{Number(ad.ctr || 0).toFixed(2)}%</Text>
                 </View>
               </View>
 
@@ -549,7 +549,7 @@ export default function SponsoredAdsScreen() {
                 <View style={styles.budgetInfo}>
                   <Text style={styles.budgetLabel}>الميزانية</Text>
                   <Text style={styles.budgetText}>
-                    {ad.total_spent.toFixed(0)} / {ad.budget_amount.toFixed(0)} ج
+                    {Number(ad.total_spent || 0).toFixed(0)} / {Number(ad.budget_amount || 0).toFixed(0)} ج
                   </Text>
                 </View>
                 <View style={styles.progressBar}>
@@ -557,8 +557,8 @@ export default function SponsoredAdsScreen() {
                     style={[
                       styles.progressFill, 
                       { 
-                        width: `${Math.min((ad.total_spent / ad.budget_amount) * 100, 100)}%`,
-                        backgroundColor: ad.total_spent >= ad.budget_amount ? colors.error : colors.primary,
+                        width: `${Math.min(((Number(ad.budget_amount || 0) > 0) ? (Number(ad.total_spent || 0) / Number(ad.budget_amount || 0)) * 100 : 0), 100)}%`,
+                        backgroundColor: (Number(ad.total_spent || 0) >= Number(ad.budget_amount || 0) && Number(ad.budget_amount || 0) > 0) ? colors.error : colors.primary,
                       }
                     ]} 
                   />

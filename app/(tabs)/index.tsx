@@ -32,6 +32,7 @@ import SponsoredStories from '@/components/home/SponsoredStories';
 import QuickActions from '@/components/home/QuickActions';
 import FeaturedStores from '@/components/home/FeaturedStores';
 import { useSponsoredAds, transformAdsForBanner, transformAdsForStories, transformAdsForFeatured } from '@/hooks/useSponsoredAds';
+import { setLastAdId } from '@/lib/adAttribution';
 import { MerchantGridCardSkeleton } from '@/components/ui/Skeleton';
 import * as Haptics from 'expo-haptics';
 
@@ -77,19 +78,19 @@ export default function HomeScreen() {
     loading: bannerLoading,
     recordImpression: recordBannerImpression,
     recordClick: recordBannerClick 
-  } = useSponsoredAds({ adType: 'banner', limit: 5 });
+  } = useSponsoredAds({ adType: 'banner', limit: 5, autoRefresh: true });
   
   const { 
     ads: storyAds,
     recordImpression: recordStoryImpression,
     recordClick: recordStoryClick 
-  } = useSponsoredAds({ adType: 'story', limit: 10 });
+  } = useSponsoredAds({ adType: 'story', limit: 10, autoRefresh: true });
   
   const { 
     ads: featuredAds,
     recordImpression: recordFeaturedImpression,
     recordClick: recordFeaturedClick 
-  } = useSponsoredAds({ adType: 'featured', limit: 6 });
+  } = useSponsoredAds({ adType: 'featured', limit: 6, autoRefresh: true });
 
   // Transform ads for components (use only real data from database)
   const sponsoredBanners = transformAdsForBanner(bannerAds);
@@ -745,10 +746,7 @@ export default function HomeScreen() {
             ads={sponsoredBanners}
             onImpression={(adId) => recordBannerImpression(adId, user?.id)}
             onClick={async (adId) => {
-              try {
-                await AsyncStorage.setItem('last_ad_id', adId);
-                await AsyncStorage.setItem('last_ad_ts', String(Date.now()));
-              } catch (e) {}
+              try { await setLastAdId(adId); } catch {}
               recordBannerClick(adId, user?.id);
             }}
           />

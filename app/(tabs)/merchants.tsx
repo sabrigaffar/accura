@@ -7,8 +7,8 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  Image,
 } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { colors, spacing, borderRadius, typography } from '@/constants/theme';
@@ -16,6 +16,7 @@ import { Search, Filter, UtensilsCrossed, Clock, CheckCircle, XCircle, MapPin } 
 import { useTheme } from '@/contexts/ThemeContext';
 import * as Location from 'expo-location';
 import { MerchantCardSkeleton } from '@/components/ui/Skeleton';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Merchant {
   id: string;
@@ -33,6 +34,27 @@ interface Merchant {
   distance_km?: number;
 }
 
+// Cache key to store last successful merchants list for instant display on next open
+const MERCHANTS_CACHE_KEY = '@last_merchants_list';
+// TTL for cache freshness (stale-while-revalidate). Old data can still be shown while refetching.
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Helper to race a promise-like with a timeout (ms)
+function withTimeout<T>(promise: any, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const id = setTimeout(() => reject(new Error('timeout')), ms);
+    promise
+      .then((res: T) => {
+        clearTimeout(id);
+        resolve(res);
+      })
+      .catch((err: any) => {
+        clearTimeout(id);
+        reject(err);
+      });
+  });
+}
+
 export default function MerchantsScreen() {
   const { theme } = useTheme();
   const [merchants, setMerchants] = useState<Merchant[]>([]);
@@ -45,6 +67,7 @@ export default function MerchantsScreen() {
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   useEffect(() => {
+    loadFromCache();
     fetchMerchants();
   }, []);
 
@@ -52,129 +75,157 @@ export default function MerchantsScreen() {
     filterMerchants();
   }, [merchants, searchQuery, selectedCategory]);
 
+  const loadFromCache = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(MERCHANTS_CACHE_KEY);
+      if (raw) {
+        let items: Merchant[] | null = null;
+        let ts = 0;
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            // Backward compatibility for older cache format
+            items = parsed as Merchant[];
+            ts = 0; // unknown age; treat as stale but show
+          } else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) {
+            items = parsed.items as Merchant[];
+            ts = typeof parsed.ts === 'number' ? parsed.ts : 0;
+          }
+        } catch {}
+
+        if (items && items.length > 0) {
+          // Show cached data immediately (stale-while-revalidate)
+          setMerchants(items);
+          setFilteredMerchants(items);
+          // Optionally, could check freshness via (Date.now() - ts <= CACHE_TTL_MS) to decide UI badges
+        }
+      }
+    } catch {
+      // ignore cache errors
+    }
+  };
+
+  const saveToCache = async (items: Merchant[]) => {
+    try {
+      const payload = {
+        ts: Date.now(),
+        items: items.slice(0, 100),
+      };
+      await AsyncStorage.setItem(MERCHANTS_CACHE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore cache errors
+    }
+  };
+
   const fetchMerchants = async () => {
     // عرّف إحداثيات خارج try حتى تتاح في المسارات الاحتياطية/‏catch
     let lat: number | null = null;
     let lng: number | null = null;
     try {
       setLoading(true);
-      // احصل على موقع العميل ثم اعرض المتاجر القريبة ضمن 10 كم
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setMerchants([]);
-        setFilteredMerchants([]);
-        return;
+      // 1) تحقق من الإذن أولاً ولا تتوقف عند الرفض — سنعرض بيانات بديلة لاحقاً
+      let granted = false;
+      try {
+        const fg = await Location.getForegroundPermissionsAsync();
+        granted = fg.status === Location.PermissionStatus.GRANTED;
+        if (!granted) {
+          const req = await Location.requestForegroundPermissionsAsync();
+          granted = req.status === Location.PermissionStatus.GRANTED;
+        }
+      } catch {}
+
+      // 2) احصل على موقع سريع إن أمكن: آخر موقع معروف، وإلا موقع متوازن الدقة
+      if (granted) {
+        try {
+          const last = await Location.getLastKnownPositionAsync();
+          if (last?.coords) {
+            lat = last.coords.latitude;
+            lng = last.coords.longitude;
+          } else {
+            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            lat = loc.coords.latitude;
+            lng = loc.coords.longitude;
+          }
+        } catch {
+          // تجاهل أخطاء الموقع — سنسقط على قوائم عامة
+        }
       }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      lat = loc.coords.latitude;
-      lng = loc.coords.longitude;
-      const { data, error } = await supabase.rpc('merchants_nearby', {
-        p_lat: lat,
-        p_lng: lng,
-        p_radius_km: nearbyRadiusKm,
-      });
-      if (!error && Array.isArray(data)) {
-        const rows = data as any[];
+
+      // Helper to set data and cache
+      const setData = async (rows: any[]) => {
         setMerchants(rows as any);
         setFilteredMerchants(rows as any);
-      } else {
-        // محاولة الاحتياط الأولى: دالة Haversine بدون PostGIS
-        if (lat != null && lng != null) {
-          const alt = await supabase.rpc('merchants_nearby_haversine', { p_lat: lat, p_lng: lng, p_radius_km: nearbyRadiusKm });
-          if (!alt.error && Array.isArray(alt.data)) {
-            setMerchants(alt.data as any);
-            setFilteredMerchants(alt.data as any);
+        await saveToCache(rows as any);
+      };
+
+      // 3) حاول القريبين أولاً مع مهلة قصيرة، بشرط وجود إحداثيات
+      if (lat != null && lng != null) {
+        try {
+          const primary = await withTimeout(
+            supabase.rpc('merchants_nearby', { p_lat: lat, p_lng: lng, p_radius_km: nearbyRadiusKm }),
+            1500
+          );
+          // @ts-ignore
+          if (primary && !primary.error && Array.isArray(primary.data)) {
+            // @ts-ignore
+            await setData(primary.data as any);
             return;
           }
+        } catch {
+          // timeout أو خطأ: انتقل للاحتياط
         }
-        // Fallbacks إضافية عند فشل PostGIS/Haversine أو عدم وجود نتائج
+
+        // احتياطي: Haversine بدون PostGIS
+        try {
+          const alt = await supabase.rpc('merchants_nearby_haversine', { p_lat: lat, p_lng: lng, p_radius_km: nearbyRadiusKm });
+          if (!alt.error && Array.isArray(alt.data)) {
+            await setData(alt.data as any);
+            return;
+          }
+        } catch {}
+      }
+
+      // 4) Fallbacks عامة بدون موقع
+      try {
         const rpc = await supabase.rpc('list_active_merchants');
         if (!rpc.error && Array.isArray(rpc.data)) {
-          setMerchants(rpc.data as any);
-          setFilteredMerchants(rpc.data as any);
-        } else {
-          const q = await supabase
-            .from('merchants')
-            .select('*')
-            .eq('is_active', true)
-            .order('created_at', { ascending: false })
-            .limit(100);
-          if (!q.error && Array.isArray(q.data)) {
-            // احسب المسافة يدوياً إن توفرت إحداثيات المتجر
-            const withDist = (q.data as any[]).map((m: any) => {
-              if (lat != null && lng != null && m.latitude != null && m.longitude != null) {
-                const toRad = (x: number) => (x * Math.PI) / 180;
-                const R = 6371;
-                const dLat = toRad(Number(m.latitude) - lat);
-                const dLon = toRad(Number(m.longitude) - lng);
-                const a = Math.sin(dLat / 2) ** 2 +
-                  Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) *
-                  Math.sin(dLon / 2) ** 2;
-                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                const d = R * c;
-                return { ...m, distance_km: d };
-              }
-              return m;
-            });
-            setMerchants(withDist as any);
-            setFilteredMerchants(withDist as any);
-          } else {
-            setMerchants([]);
-            setFilteredMerchants([]);
-          }
+          await setData(rpc.data as any);
+          return;
         }
+      } catch {}
+
+      // 5) آخر احتياط: استعلام مباشر + حساب مسافة إن توفرت إحداثيات
+      const q = await supabase
+        .from('merchants')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (!q.error && Array.isArray(q.data)) {
+        const withDist = (q.data as any[]).map((m: any) => {
+          if (lat != null && lng != null && m.latitude != null && m.longitude != null) {
+            const toRad = (x: number) => (x * Math.PI) / 180;
+            const R = 6371;
+            const dLat = toRad(Number(m.latitude) - lat);
+            const dLon = toRad(Number(m.longitude) - lng);
+            const a = Math.sin(dLat / 2) ** 2 +
+              Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) *
+              Math.sin(dLon / 2) ** 2;
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const d = R * c;
+            return { ...m, distance_km: d };
+          }
+          return m;
+        });
+        await setData(withDist as any);
+      } else {
+        setMerchants([]);
+        setFilteredMerchants([]);
       }
     } catch (error) {
       console.error('Error fetching nearby merchants:', error);
-      // عند أي خطأ (مثل SRID مفقود)، استخدم المسارات الاحتياطية
-      try {
-        // حاول دالة Haversine أولاً إن كانت الإحداثيات متاحة
-        if (lat != null && lng != null) {
-          const alt = await supabase.rpc('merchants_nearby_haversine', { p_lat: lat, p_lng: lng, p_radius_km: nearbyRadiusKm });
-          if (!alt.error && Array.isArray(alt.data)) {
-            setMerchants(alt.data as any);
-            setFilteredMerchants(alt.data as any);
-            return;
-          }
-        }
-        const rpc = await supabase.rpc('list_active_merchants');
-        if (!rpc.error && Array.isArray(rpc.data)) {
-          setMerchants(rpc.data as any);
-          setFilteredMerchants(rpc.data as any);
-        } else {
-          const q = await supabase
-            .from('merchants')
-            .select('*')
-            .eq('is_active', true)
-            .order('created_at', { ascending: false })
-            .limit(100);
-          if (!q.error && Array.isArray(q.data)) {
-            const withDist = (q.data as any[]).map((m: any) => {
-              if (lat != null && lng != null && m.latitude != null && m.longitude != null) {
-                const toRad = (x: number) => (x * Math.PI) / 180;
-                const R = 6371;
-                const dLat = toRad(Number(m.latitude) - lat);
-                const dLon = toRad(Number(m.longitude) - lng);
-                const a = Math.sin(dLat / 2) ** 2 +
-                  Math.cos(toRad(lat)) * Math.cos(toRad(Number(m.latitude))) *
-                  Math.sin(dLon / 2) ** 2;
-                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                const d = R * c;
-                return { ...m, distance_km: d };
-              }
-              return m;
-            });
-            setMerchants(withDist as any);
-            setFilteredMerchants(withDist as any);
-          } else {
-            setMerchants([]);
-            setFilteredMerchants([]);
-          }
-        }
-      } catch {
-        setMerchants([]);
-        setFilteredMerchants([]);
-      }
+      setMerchants([]);
+      setFilteredMerchants([]);
     } finally {
       setLoading(false);
     }
@@ -236,7 +287,13 @@ export default function MerchantsScreen() {
       >
         <View style={styles.merchantImage}>
           {(item.banner_url || item.logo_url) ? (
-            <Image source={{ uri: (item.banner_url || item.logo_url) as string }} style={styles.merchantLogo} />
+            <ExpoImage
+              source={{ uri: (item.banner_url || item.logo_url) as string }}
+              style={styles.merchantLogo}
+              contentFit="cover"
+              transition={200}
+              cachePolicy="memory-disk"
+            />
           ) : (
             <View style={[styles.merchantLogo, styles.placeholderLogo]}>
               <UtensilsCrossed size={32} color={theme.textLight} />
@@ -280,7 +337,7 @@ export default function MerchantsScreen() {
     );
   };
 
-  if (loading) {
+  if (loading && filteredMerchants.length === 0) {
     return (
       <View style={styles.container}>
         <View style={{ paddingVertical: spacing.md }}>
@@ -349,6 +406,11 @@ export default function MerchantsScreen() {
         keyExtractor={item => item.id}
         contentContainerStyle={styles.merchantsList}
         showsVerticalScrollIndicator={false}
+        initialNumToRender={12}
+        windowSize={7}
+        maxToRenderPerBatch={12}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews={true}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>لا توجد متاجر قريبة ضمن 10 كم</Text>

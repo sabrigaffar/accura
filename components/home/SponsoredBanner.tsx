@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, ScrollView } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Star, Clock, MapPin, Gift } from 'lucide-react-native';
@@ -103,7 +104,13 @@ export default function SponsoredBanner({ ads, onImpression, onClick }: Sponsore
             {/* Image + Overlay wrapper to enforce rounded corners and clipping */}
             <View style={styles.imageWrapper}>
               {/* Background Image */}
-              <Image source={{ uri: ad.imageUrl }} style={styles.backgroundImage} resizeMode="cover" />
+              <ExpoImage
+                source={{ uri: ad.imageUrl }}
+                style={styles.backgroundImage}
+                contentFit="cover"
+                transition={250}
+                cachePolicy="memory-disk"
+              />
               
               {/* Gradient Overlay */}
               <LinearGradient

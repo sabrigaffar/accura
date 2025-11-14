@@ -909,10 +909,9 @@ export default function OrderDetailScreen() {
         )}
         
         {/* زر إلغاء الطلب - يظهر فقط للعميل وعندما يكون الطلب قابلاً للإلغاء */}
-        {user?.id === order?.customer_id && 
-         order?.status !== 'cancelled' && 
-         order?.status !== 'delivered' && 
-         order?.status !== 'on_the_way' && (
+        {user?.id === order?.customer_id &&
+         !order?.driver?.id &&
+         ['pending','accepted','preparing'].includes(order?.status) && (
           <TouchableOpacity 
             style={[styles.footerButton, styles.cancelButton]}
             onPress={handleCancelOrder}

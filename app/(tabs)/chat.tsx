@@ -9,6 +9,8 @@ import { useChat } from '@/contexts/ChatContext';
 import type { ConversationWithDetails } from '@/types/chat';
 import { NotificationItemSkeleton } from '@/components/ui/Skeleton';
 
+export const options = { href: null };
+
 export default function ChatScreen() {
   const { conversations, unreadCount, loading, refreshConversations } = useChat();
   const [refreshing, setRefreshing] = useState(false);

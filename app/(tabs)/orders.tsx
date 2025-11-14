@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { Package, Clock, CheckCircle, XCircle } from 'lucide-react-native';
+import { Package, Clock, CheckCircle, XCircle, Star } from 'lucide-react-native';
 import { colors, spacing, borderRadius, typography, shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { Order } from '@/types/database';
@@ -153,6 +153,7 @@ export default function OrdersScreen() {
   const renderOrderCard = ({ item }: { item: OrderWithMerchant }) => {
     const statusConfig = ORDER_STATUS_CONFIG[item.status as keyof typeof ORDER_STATUS_CONFIG];
     const StatusIcon = statusConfig?.icon || Package;
+    const showRate = activeTab === 'completed' && item.status === 'delivered';
 
     return (
       <TouchableOpacity
@@ -192,6 +193,15 @@ export default function OrdersScreen() {
               <View style={styles.paymentBadge}>
                 <Text style={styles.paymentText}>نقدي</Text>
               </View>
+            )}
+            {showRate && (
+              <TouchableOpacity
+                style={styles.rateButton}
+                onPress={() => router.push(`/order/${item.id}/rate`)}
+              >
+                <Star size={16} color={'#FFFFFF'} />
+                <Text style={styles.rateButtonText}>قيِّم الطلب</Text>
+              </TouchableOpacity>
             )}
           </View>
         </View>
@@ -353,6 +363,20 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingTop: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: theme.border,
+  },
+  rateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: theme.warning,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.md,
+  },
+  rateButtonText: {
+    ...typography.caption,
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   totalContainer: {
     flexDirection: 'row',

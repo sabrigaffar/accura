@@ -269,7 +269,7 @@ class ChatService {
       if (!user.user) throw new Error('المستخدم غير مسجل الدخول');
 
       const { data, error } = await supabase
-        .from('messages')
+        .from('chat_messages')
         .insert({
           conversation_id: params.conversation_id,
           sender_id: user.user.id,
@@ -401,6 +401,18 @@ class ChatService {
         {
           event: 'INSERT',
           schema: 'public',
+          table: 'chat_messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          callback(payload.new as Message);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
           table: 'messages',
           filter: `conversation_id=eq.${conversationId}`,
         },
@@ -426,11 +438,11 @@ class ChatService {
         {
           event: '*',
           schema: 'public',
-          table: 'conversations',
+          table: 'chat_conversations',
         },
         async (payload) => {
           // التحقق من أن المستخدم مشارك في هذه المحادثة
-          const conversation = payload.new as Conversation;
+          const conversation = payload.new as unknown as Conversation;
           const { data } = await supabase
             .from('conversation_participants')
             .select('user_id')
@@ -438,6 +450,26 @@ class ChatService {
             .eq('user_id', userId)
             .single();
 
+          if (data) {
+            callback(conversation);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'conversations',
+        },
+        async (payload) => {
+          const conversation = payload.new as unknown as Conversation;
+          const { data } = await supabase
+            .from('conversation_participants')
+            .select('user_id')
+            .eq('conversation_id', conversation.id)
+            .eq('user_id', userId)
+            .single();
           if (data) {
             callback(conversation);
           }
@@ -464,11 +496,23 @@ class ChatService {
         {
           event: 'UPDATE',
           schema: 'public',
+          table: 'chat_participants',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          callback(payload.new as unknown as ConversationParticipant);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
           table: 'conversation_participants',
           filter: `user_id=eq.${userId}`,
         },
         (payload) => {
-          callback(payload.new as ConversationParticipant);
+          callback(payload.new as unknown as ConversationParticipant);
         }
       )
       .subscribe();

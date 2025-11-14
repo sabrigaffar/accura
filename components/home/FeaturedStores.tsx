@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Star, MapPin, Gift, Sparkles } from 'lucide-react-native';
@@ -76,7 +77,13 @@ export default function FeaturedStores({ stores }: FeaturedStoresProps) {
             <View style={[styles.cardContent, store.isSponsored && styles.sponsoredCard]}>
               {/* Store Image */}
               <View style={styles.imageContainer}>
-                <Image source={{ uri: store.imageUrl }} style={styles.storeImage} />
+                <ExpoImage
+                  source={{ uri: store.imageUrl }}
+                  style={styles.storeImage}
+                  contentFit="cover"
+                  transition={200}
+                  cachePolicy="memory-disk"
+                />
                 
                 {/* Sponsored Badge */}
                 {store.isSponsored && (

@@ -1,13 +1,16 @@
 import { Tabs, router } from 'expo-router';
-import { Map, Package, TrendingUp, Star, User, Bell } from 'lucide-react-native';
+import { Map, Package, TrendingUp, Star, User, Bell, MapPin, CreditCard } from 'lucide-react-native';
 import { colors } from '@/constants/theme';
 import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Platform } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
+import FloatingChatButton from '@/components/FloatingChatButton';
+import ChatSheet from '@/components/ChatSheet';
 
 export default function DriverTabsLayout() {
   const { user } = useAuth();
+  const [chatVisible, setChatVisible] = useState(false);
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
 
@@ -62,62 +65,121 @@ export default function DriverTabsLayout() {
   }
 
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textLight,
-        tabBarStyle: {
-          backgroundColor: colors.white,
-          borderTopWidth: 1,
-          borderTopColor: colors.border,
-          height: 60,
-          paddingBottom: 8,
-        },
-        headerShown: false,
-      }}
-    >
+    <View style={{ flex: 1 }}>
+      <Tabs
+        screenOptions={{
+          tabBarActiveTintColor: colors.primary,
+          tabBarInactiveTintColor: colors.textLight,
+          tabBarStyle: {
+            backgroundColor: colors.white,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+            height: 60,
+            paddingBottom: 8,
+          },
+          tabBarLabelStyle: { fontSize: 10 },
+          headerShown: false,
+        }}
+      >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'الطلبات المتاحة',
-          tabBarIcon: ({ color, size }) => <Map size={size} color={color} />,
+          title: 'طلبات',
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#06B6D4' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <Map size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="active-orders"
         options={{
-          title: 'طلباتي النشطة',
-          tabBarIcon: ({ color, size }) => <Package size={size} color={color} />,
+          title: 'نشطة',
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#F59E0B' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <Package size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="earnings"
         options={{
-          title: 'أرباحي',
-          tabBarIcon: ({ color, size }) => <TrendingUp size={size} color={color} />,
+          title: 'أرباح',
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#22C55E' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <TrendingUp size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="nearby-map"
+        options={{
+          title: 'خريطة',
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#2563EB' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <MapPin size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="wallet"
+        options={{
+          title: 'محفظة',
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#10B981' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <CreditCard size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="reviews"
         options={{
-          title: 'تقييماتي',
-          tabBarIcon: ({ color, size }) => <Star size={size} color={color} />,
+          title: 'تقييمات',
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#FB923C' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <Star size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="notifications"
         options={{
-          title: 'الإشعارات',
-          tabBarIcon: ({ color, size }) => <Bell size={size} color={color} />,
+          title: 'إشعارات',
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#F43F5E' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <Bell size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'حسابي',
-          tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
+          tabBarIcon: ({ focused }) => (
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: focused ? '#16A34A' : '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <User size={18} color={focused ? '#FFFFFF' : '#9CA3AF'} />
+            </View>
+          ),
         }}
       />
-    </Tabs>
+      </Tabs>
+      {/* Floating Chat Button */}
+      <FloatingChatButton onPress={() => setChatVisible(v => !v)} />
+      <ChatSheet
+        visible={chatVisible}
+        onClose={() => setChatVisible(false)}
+        title="المحادثات"
+        fabBottom={Platform.select({ ios: 100, android: 88, default: 88 }) as number}
+        fabSize={56}
+        gapAboveFab={12}
+      />
+    </View>
   );
 }

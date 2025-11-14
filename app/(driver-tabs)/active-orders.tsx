@@ -15,6 +15,7 @@ import {
   Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -78,6 +79,35 @@ export default function DriverActiveOrders() {
   const convoAttemptedForOrderRef = useRef<Record<string, boolean>>({});
   const autoNavigatedRef = useRef<boolean>(false);
   const fetchingActiveRef = React.useRef(false);
+  // Press-and-hold confirm state for delivery completion
+  const [holdProgress, setHoldProgress] = useState(0);
+  const holdTimerRef = useRef<any>(null);
+
+  const startHoldConfirm = () => {
+    if (completing || getCurrentStep() !== DeliveryStep.HEADING_TO_CUSTOMER) return;
+    if (holdTimerRef.current) return;
+    setHoldProgress(0);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    const start = Date.now();
+    holdTimerRef.current = setInterval(() => {
+      const p = Math.min(1, (Date.now() - start) / 1200);
+      setHoldProgress(p);
+      if (p >= 1) {
+        clearInterval(holdTimerRef.current);
+        holdTimerRef.current = null;
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        handleCompleteDelivery();
+      }
+    }, 50);
+  };
+
+  const stopHoldConfirm = () => {
+    if (holdTimerRef.current) {
+      clearInterval(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setHoldProgress(0);
+  };
 
   // نافذة تأكيد قبل فتح الخرائط
   const promptNavigate = (target: 'merchant' | 'customer') => {
@@ -91,6 +121,8 @@ export default function DriverActiveOrders() {
       ]
     );
   };
+
+  // ملاحظة: دالة handleNavigate معرفة لاحقاً في الملف بإصدار أكثر تفصيلاً مع مسارات بديلة
 
   useEffect(() => {
     fetchActiveOrder();
@@ -571,10 +603,9 @@ export default function DriverActiveOrders() {
         .eq('id', activeOrder.id);
 
       if (error) throw error;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       Alert.alert('✅ تم التحديث', 'أنت الآن في الطريق إلى المتجر', [{ text: 'حسناً' }]);
       fetchActiveOrder();
-      // اعرض تأكيد فتح الخرائط للمتجر
-      promptNavigate('merchant');
     } catch (error) {
       console.error('Error updating order:', error);
       Alert.alert('❌ خطأ', 'لم يتم تحديث الحالة. حاول مرة أخرى.', [{ text: 'حسناً' }]);
@@ -606,11 +637,10 @@ export default function DriverActiveOrders() {
                 .eq('id', activeOrder.id);
 
               if (error) throw error;
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
 
               Alert.alert('تم الاستلام', 'الآن يمكنك التوجه للعميل');
               fetchActiveOrder();
-              // اعرض تأكيد فتح الخرائط للعميل بعد الاستلام
-              promptNavigate('customer');
             } catch (error) {
               console.error('Error updating order:', error);
               Alert.alert('❌ خطأ', 'لم يتم تأكيد الاستلام. حاول مرة أخرى.', [{ text: 'حسناً' }]);
@@ -639,8 +669,11 @@ export default function DriverActiveOrders() {
 
       if (error) throw error;
 
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       Alert.alert('تم', 'تم تحديث حالة الطلب');
       fetchActiveOrder();
+      // ❗ عرض تأكيد فتح الخرائط فقط عند بدء التوجه للعميل
+      promptNavigate('customer');
     } catch (error) {
       console.error('Error updating order:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء تحديث الحالة');
@@ -747,6 +780,7 @@ export default function DriverActiveOrders() {
                 return;
               }
 
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
               // دفاع إضافي: عدّل الحالة إلى delivered إذا لم يقم الRPC بذلك
               const { error: setDeliveredErr } = await supabase
                 .from('orders')
@@ -1229,18 +1263,36 @@ export default function DriverActiveOrders() {
             <TouchableOpacity
               style={[
                 styles.completeButton,
+                { position: 'relative' },
                 completing && styles.completeButtonDisabled,
                 getCurrentStep() !== DeliveryStep.HEADING_TO_CUSTOMER && styles.completeButtonDisabled,
               ]}
-              onPress={handleCompleteDelivery}
+              onPressIn={startHoldConfirm}
+              onPressOut={stopHoldConfirm}
               disabled={completing || getCurrentStep() !== DeliveryStep.HEADING_TO_CUSTOMER}
+              activeOpacity={0.9}
             >
+              {/* Progress overlay */}
+              <View
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: `${Math.round(holdProgress * 100)}%`,
+                  backgroundColor: 'rgba(255,255,255,0.15)',
+                  borderTopLeftRadius: 12,
+                  borderBottomLeftRadius: 12,
+                }}
+              />
               {completing ? (
                 <ActivityIndicator color={colors.white} size="small" />
               ) : (
                 <>
-                  <CheckCircle size={20} color={colors.white} />
-                  <Text style={styles.completeButtonText}>تم التسليم</Text>
+                  <CheckCircle size={18} color={colors.white} />
+                  <Text style={styles.completeButtonText} numberOfLines={1} ellipsizeMode="tail">
+                    {holdProgress > 0 ? 'استمر بالضغط...' : 'اضغط مطوّلاً للتسليم'}
+                  </Text>
                 </>
               )}
             </TouchableOpacity>
@@ -1508,15 +1560,16 @@ const createStyles = (colors: any) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.success,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
     borderRadius: borderRadius.md,
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   completeButtonDisabled: {
     opacity: 0.6,
   },
   completeButtonText: {
     ...typography.bodyMedium,
+    fontSize: 13,
     color: colors.white,
   },
   stepsContainer: {

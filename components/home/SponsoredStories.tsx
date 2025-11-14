@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { colors, spacing, typography, borderRadius } from '@/constants/theme';
@@ -63,7 +64,13 @@ export default function SponsoredStories({ stories }: SponsoredStoriesProps) {
               end={{ x: 1, y: 1 }}
             >
               <View style={styles.imageContainer}>
-                <Image source={{ uri: story.imageUrl }} style={styles.storyImage} />
+                <ExpoImage
+                  source={{ uri: story.imageUrl }}
+                  style={styles.storyImage}
+                  contentFit="cover"
+                  transition={200}
+                  cachePolicy="memory-disk"
+                />
                 
                 {/* Badge Overlay */}
                 {story.badge ? (
